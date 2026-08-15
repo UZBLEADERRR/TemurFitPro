@@ -1,4 +1,4 @@
-import type { Tenant } from '@prisma/client';
+import type { Tenant } from '../generated/platform';
 import { hhmmToMinutes } from './time';
 
 export const MEAL_TYPES = ['nonushta', 'tushlik', 'kechki'] as const;
