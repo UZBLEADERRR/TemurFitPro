@@ -42,7 +42,7 @@ jobs:
         run: |
           npm run sql:tenant
           if ! git diff --quiet prisma/tenant-init.sql; then
-            echo "::error::prisma/tenant-init.sql eskirgan. `npm run sql:tenant` ni ishga tushirib, natijani commit qiling."
+            echo '::error::prisma/tenant-init.sql eskirgan. npm run sql:tenant ni ishga tushirib, natijani commit qiling.'
             git diff prisma/tenant-init.sql
             exit 1
           fi
