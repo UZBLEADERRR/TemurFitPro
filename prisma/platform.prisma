@@ -1,0 +1,82 @@
+// PLATFORMA bazasi — bitta kichik SQLite fayl (/data/platform.db).
+// Bu yerda faqat super adminlar va botlar ro'yxati (sozlamalari bilan) yotadi.
+// Har bir botning ish ma'lumotlari ALOHIDA faylda — prisma/tenant.prisma ga qarang.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/platform"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("PLATFORM_DATABASE_URL")
+}
+
+/// Super adminlar — ona bot orqali yangi bot qo'shadi, botlarni boshqaradi.
+model SuperAdmin {
+  id          Int      @id @default(autoincrement())
+  telegramId  String   @unique
+  name        String   @default("")
+  addedByTgId String?
+  createdAt   DateTime @default(now())
+}
+
+/// Bitta mijoz boti. botToken AES-256-GCM bilan shifrlangan holda saqlanadi.
+/// Ish ma'lumotlari (guruhlar, a'zolar, ovqatlar) alohida SQLite faylda.
+model Tenant {
+  id            String @id @default(cuid())
+  botId         String @unique /// Telegram bot raqamli id
+  botUsername   String
+  botUsernameLc String @default("") /// kichik harfda — SQLite'da case-insensitive qidiruv uchun
+  botTitle      String @default("")
+  botTokenEnc   String
+  webhookSecret String
+  status        String @default("active") /// active | paused
+
+  /// AI yordamchi nomi. AI hozircha o'chirilgan (AI_ENABLED=false).
+  agentName    String  @default("Feruza")
+  coachStyle   String  @default("")
+  geminiKeyEnc String?
+
+  timezone      String   @default("Asia/Tashkent")
+  createdByTgId String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // --- Ratsion sozlamalari ---
+  breakfastTime       String  @default("08:00")
+  lunchTime           String  @default("13:00")
+  dinnerTime          String  @default("19:00")
+  graceMinutes        Int     @default(60)
+  reminderInterval    Int     @default(60)
+  maxReminders        Int     @default(3)
+  dailyTableHour      Int     @default(6)
+  requirePhoto        Boolean @default(true)
+  autoDeleteReminders Boolean @default(true)
+
+  breakfastWords String @default("nonushta,#nonushta,ertalabki")
+  lunchWords     String @default("tushlik,#tushlik,abed,#abed,obed")
+  dinnerWords    String @default("kechki,#kechki,kechki_ovqat,#kechki_ovqat,uzhin")
+
+  @@index([status])
+}
+
+/// Ona botdagi ko'p bosqichli dialoglar holati (restartga chidamli).
+model ControlSession {
+  id        String   @id @default(cuid())
+  chatId    String   @unique
+  state     String   @default("idle")
+  payload   String   @default("{}")
+  updatedAt DateTime @updatedAt
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  tenantId  String?
+  actorTgId String
+  action    String
+  detail    String   @default("")
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}

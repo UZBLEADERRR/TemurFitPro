@@ -1,0 +1,590 @@
+/* TemurFitPro — minimalist mobil mini ilova.
+   Ranglar Telegram mavzusidan olinadi, fallback'lar quyida. */
+
+:root {
+    --bg: #f2f3f5;
+    --card: #ffffff;
+    --text: #0d0f12;
+    --hint: #7d8894;
+    --accent: #2b7fff;
+    --accent-ink: #ffffff;
+    --line: #e6e8eb;
+
+    --ok: #22c55e;
+    --late: #f59e0b;
+    --miss: #cbd2d9;
+
+    --r-lg: 18px;
+    --r-md: 13px;
+    --r-sm: 9px;
+    --pad: 16px;
+    --safe-b: env(safe-area-inset-bottom, 0px);
+}
+
+:root[data-scheme='dark'] {
+    --bg: #0f1115;
+    --card: #181b21;
+    --text: #f2f4f7;
+    --hint: #8b95a3;
+    --accent: #4c8dff;
+    --accent-ink: #ffffff;
+    --line: #262a32;
+    --miss: #333944;
+}
+
+* {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body,
+#root {
+    height: 100%;
+}
+
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    overscroll-behavior-y: none;
+}
+
+button {
+    font: inherit;
+    color: inherit;
+    border: none;
+    background: none;
+    cursor: pointer;
+}
+
+input,
+textarea,
+select {
+    font: inherit;
+    color: inherit;
+}
+
+/* ---------- Karkas ---------- */
+.app {
+    min-height: 100%;
+    padding-bottom: calc(76px + var(--safe-b));
+}
+
+.screen {
+    padding: 8px var(--pad) 24px;
+    animation: rise 0.22s ease;
+}
+
+@keyframes rise {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .screen {
+        animation: none;
+    }
+}
+
+.head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 0 16px;
+}
+
+.head h1 {
+    margin: 0;
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+}
+
+.head .sub {
+    margin: 2px 0 0;
+    color: var(--hint);
+    font-size: 13px;
+}
+
+/* ---------- Kartalar ---------- */
+.card {
+    background: var(--card);
+    border-radius: var(--r-lg);
+    padding: 14px;
+    margin-bottom: 12px;
+}
+
+.card.tight {
+    padding: 6px 14px;
+}
+
+.card-title {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: var(--hint);
+    margin: 0 0 10px;
+}
+
+/* ---------- Segment tugmalar ---------- */
+.seg {
+    display: flex;
+    gap: 4px;
+    background: var(--bg);
+    padding: 3px;
+    border-radius: 12px;
+    margin-bottom: 14px;
+}
+
+:root[data-scheme='dark'] .seg {
+    background: #0b0d11;
+}
+
+.seg button {
+    flex: 1;
+    padding: 8px 4px;
+    border-radius: 9px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--hint);
+    transition: background 0.15s, color 0.15s;
+}
+
+.seg button.on {
+    background: var(--card);
+    color: var(--text);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+/* ---------- Ro'yxat qatorlari ---------- */
+.row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 0;
+    border-bottom: 1px solid var(--line);
+    width: 100%;
+    text-align: left;
+}
+
+.row:last-child {
+    border-bottom: none;
+}
+
+.row .grow {
+    flex: 1;
+    min-width: 0;
+}
+
+.row .name {
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.row .meta {
+    font-size: 12px;
+    color: var(--hint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.avatar {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent-ink);
+    flex-shrink: 0;
+}
+
+/* ---------- Ovqat belgilari ---------- */
+.dots {
+    display: flex;
+    gap: 5px;
+    flex-shrink: 0;
+}
+
+.dot {
+    width: 22px;
+    height: 22px;
+    border-radius: 7px;
+    display: grid;
+    place-items: center;
+    font-size: 10px;
+    font-weight: 700;
+    color: #fff;
+    background: var(--miss);
+}
+
+.dot.on_time {
+    background: var(--ok);
+}
+
+.dot.late {
+    background: var(--late);
+}
+
+.dot.missing {
+    color: var(--hint);
+}
+
+/* ---------- Statistika ---------- */
+.stat-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.stat {
+    background: var(--card);
+    border-radius: var(--r-md);
+    padding: 12px 10px;
+    text-align: center;
+}
+
+.stat .v {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    display: block;
+}
+
+.stat .k {
+    font-size: 11px;
+    color: var(--hint);
+    margin-top: 1px;
+}
+
+.bar {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--bg);
+    overflow: hidden;
+    margin-top: 6px;
+}
+
+:root[data-scheme='dark'] .bar {
+    background: #0b0d11;
+}
+
+.bar > i {
+    display: block;
+    height: 100%;
+    border-radius: 3px;
+    background: var(--accent);
+    transition: width 0.4s ease;
+}
+
+.bar.good > i {
+    background: var(--ok);
+}
+.bar.warn > i {
+    background: var(--late);
+}
+.bar.bad > i {
+    background: #ef4444;
+}
+
+/* ---------- 30 kunlik to'r ---------- */
+.grid30 {
+    display: grid;
+    grid-template-columns: repeat(10, 1fr);
+    gap: 5px;
+}
+
+.cell {
+    aspect-ratio: 1;
+    border-radius: 5px;
+    background: var(--miss);
+}
+
+.cell.l1 { background: color-mix(in srgb, var(--ok) 35%, var(--miss)); }
+.cell.l2 { background: color-mix(in srgb, var(--ok) 65%, var(--miss)); }
+.cell.l3 { background: var(--ok); }
+.cell.today { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ---------- Forma ---------- */
+.field {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 11px 0;
+    border-bottom: 1px solid var(--line);
+}
+
+.field:last-child {
+    border-bottom: none;
+}
+
+.field label {
+    font-size: 14px;
+    flex: 1;
+}
+
+.field .desc {
+    font-size: 12px;
+    color: var(--hint);
+    margin-top: 1px;
+}
+
+.field input[type='time'],
+.field input[type='number'],
+.field input[type='text'] {
+    background: var(--bg);
+    border: 1px solid transparent;
+    border-radius: var(--r-sm);
+    padding: 7px 10px;
+    width: 104px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+
+:root[data-scheme='dark'] .field input {
+    background: #0b0d11;
+}
+
+.field input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+textarea {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid transparent;
+    border-radius: var(--r-md);
+    padding: 11px;
+    min-height: 108px;
+    resize: vertical;
+    line-height: 1.5;
+}
+
+:root[data-scheme='dark'] textarea {
+    background: #0b0d11;
+}
+
+textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.switch {
+    width: 46px;
+    height: 27px;
+    border-radius: 14px;
+    background: var(--miss);
+    position: relative;
+    transition: background 0.18s;
+    flex-shrink: 0;
+}
+
+.switch.on {
+    background: var(--ok);
+}
+
+.switch::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 21px;
+    height: 21px;
+    border-radius: 50%;
+    background: #fff;
+    transition: transform 0.18s;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.switch.on::after {
+    transform: translateX(19px);
+}
+
+.btn {
+    display: block;
+    width: 100%;
+    padding: 13px;
+    border-radius: var(--r-md);
+    background: var(--accent);
+    color: var(--accent-ink);
+    font-weight: 600;
+    text-align: center;
+    transition: opacity 0.15s;
+}
+
+.btn:active {
+    opacity: 0.7;
+}
+
+.btn:disabled {
+    opacity: 0.45;
+}
+
+.btn.ghost {
+    background: var(--card);
+    color: var(--text);
+}
+
+/* ---------- Pastki navigatsiya ---------- */
+.nav {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    padding: 6px 6px calc(6px + var(--safe-b));
+    background: color-mix(in srgb, var(--card) 88%, transparent);
+    backdrop-filter: saturate(160%) blur(18px);
+    -webkit-backdrop-filter: saturate(160%) blur(18px);
+    border-top: 1px solid var(--line);
+    z-index: 20;
+}
+
+.nav button {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 6px 0;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--hint);
+    transition: color 0.15s;
+}
+
+.nav button.on {
+    color: var(--accent);
+}
+
+.nav .ic {
+    font-size: 19px;
+    line-height: 1;
+}
+
+/* ---------- Holatlar ---------- */
+.empty {
+    text-align: center;
+    padding: 44px 20px;
+    color: var(--hint);
+}
+
+.empty .ic {
+    font-size: 38px;
+    display: block;
+    margin-bottom: 10px;
+    opacity: 0.6;
+}
+
+.skeleton {
+    height: 58px;
+    border-radius: var(--r-md);
+    background: linear-gradient(90deg, var(--card) 25%, var(--bg) 50%, var(--card) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.3s infinite;
+    margin-bottom: 8px;
+}
+
+@keyframes shimmer {
+    to {
+        background-position: -200% 0;
+    }
+}
+
+.pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 9px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    background: var(--bg);
+    color: var(--hint);
+}
+
+:root[data-scheme='dark'] .pill {
+    background: #0b0d11;
+}
+
+.pill.ok {
+    background: color-mix(in srgb, var(--ok) 16%, transparent);
+    color: var(--ok);
+}
+
+.pill.warn {
+    background: color-mix(in srgb, var(--late) 18%, transparent);
+    color: var(--late);
+}
+
+/* ---------- Modal ---------- */
+.sheet-bg {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 40;
+    animation: fade 0.18s ease;
+}
+
+.sheet {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 41;
+    background: var(--card);
+    border-radius: 20px 20px 0 0;
+    padding: 8px var(--pad) calc(20px + var(--safe-b));
+    max-height: 84vh;
+    overflow-y: auto;
+    animation: slide 0.24s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.sheet .handle {
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--miss);
+    margin: 6px auto 14px;
+}
+
+@keyframes fade {
+    from {
+        opacity: 0;
+    }
+}
+
+@keyframes slide {
+    from {
+        transform: translateY(100%);
+    }
+}
+
+.err {
+    background: color-mix(in srgb, #ef4444 12%, transparent);
+    color: #ef4444;
+    padding: 11px 13px;
+    border-radius: var(--r-md);
+    font-size: 13px;
+    margin-bottom: 12px;
+}
