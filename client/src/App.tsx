@@ -61,7 +61,7 @@ export default function App() {
             {tab === 'today' && <Today me={me} onPick={setPicked} />}
             {tab === 'rank' && isCoach && <Ranking onPick={setPicked} />}
             {tab === 'members' && isCoach && <Members onPick={setPicked} />}
-            {tab === 'settings' && isCoach && <SettingsScreen agentName={me.tenant.agentName} />}
+            {tab === 'settings' && isCoach && <SettingsScreen />}
 
             {picked && <MemberSheet id={picked} onClose={() => setPicked(null)} />}
 

@@ -1,5 +1,5 @@
-import type { Tenant } from '@prisma/client';
-import { prisma } from '../core/db';
+import type { Tenant } from '../generated/platform';
+import type { TenantClient } from '../core/db';
 import { MEAL_TYPES, MEAL_LABELS, MealType } from '../core/meals';
 import { todayIn, lastNDates, daysAgoIn, safeTz, formatIn } from '../core/time';
 import { esc } from '../core/telegram';
@@ -16,11 +16,9 @@ export interface MemberBrief {
 }
 
 export interface InactiveRow extends MemberBrief {
-    /// Oxirgi marta ovqat yuborgan sana (yo'q bo'lsa null)
     lastMealDate: string | null;
     daysSince: number | null;
     missedCount: number;
-    missedDetail: string[];
 }
 
 export interface StatsRow extends MemberBrief {
@@ -31,34 +29,19 @@ export interface StatsRow extends MemberBrief {
     rate: number;
 }
 
-async function groupFilter(tenantId: string, groupId?: string | null) {
-    if (!groupId) return {};
-    return { groups: { some: { groupId } } };
-}
+type MemberWithGroups = {
+    id: string;
+    telegramId: string;
+    name: string;
+    username: string | null;
+    role: string;
+    status: string;
+    timezone: string;
+    groups: { group: { title: string; chatId: string } }[];
+};
 
-export async function listGroups(tenantId: string) {
-    return prisma.group.findMany({
-        where: { tenantId, isActive: true },
-        orderBy: { createdAt: 'asc' },
-    });
-}
-
-export async function listMembers(
-    tenantId: string,
-    opts: { groupId?: string | null; role?: string; status?: string } = {},
-): Promise<MemberBrief[]> {
-    const members = await prisma.member.findMany({
-        where: {
-            tenantId,
-            ...(opts.role ? { role: opts.role } : {}),
-            status: opts.status ?? 'active',
-            ...(await groupFilter(tenantId, opts.groupId)),
-        },
-        include: { groups: { include: { group: true } } },
-        orderBy: { joinedAt: 'asc' },
-    });
-
-    return members.map(m => ({
+function brief(m: MemberWithGroups): MemberBrief {
+    return {
         id: m.id,
         telegramId: m.telegramId,
         name: m.name,
@@ -67,26 +50,48 @@ export async function listMembers(
         status: m.status,
         timezone: m.timezone,
         groups: m.groups.map(g => g.group.title || g.group.chatId),
-    }));
+    };
+}
+
+const withGroups = { groups: { include: { group: true } } } as const;
+
+function groupScope(groupId?: string | null) {
+    return groupId ? { groups: { some: { groupId } } } : {};
+}
+
+export async function listGroups(db: TenantClient) {
+    return db.group.findMany({ where: { isActive: true }, orderBy: { createdAt: 'asc' } });
+}
+
+export async function listMembers(
+    db: TenantClient,
+    opts: { groupId?: string | null; role?: string; status?: string } = {},
+): Promise<MemberBrief[]> {
+    const members = await db.member.findMany({
+        where: {
+            ...(opts.role ? { role: opts.role } : {}),
+            status: opts.status ?? 'active',
+            ...groupScope(opts.groupId),
+        },
+        include: withGroups,
+        orderBy: { joinedAt: 'asc' },
+    });
+    return members.map(brief);
 }
 
 /// "Oxirgi N kunda ovqat jo'natmaganlar" — murabbiyning asosiy so'rovi.
-/// Barcha guruhlar bo'ylab ishlaydi (groupId berilmasa).
+/// groupId berilmasa BARCHA guruhlar bo'ylab ishlaydi.
 export async function findInactive(
+    db: TenantClient,
     tenant: Tenant,
-    opts: { days: number; mealType?: MealType | 'any'; groupId?: string | null; minMissed?: number } = { days: 2 },
+    opts: { days: number; mealType?: MealType | 'any'; groupId?: string | null } = { days: 2 },
 ): Promise<InactiveRow[]> {
     const days = Math.max(1, Math.min(60, opts.days || 2));
     const meal = opts.mealType && opts.mealType !== 'any' ? opts.mealType : null;
 
-    const members = await prisma.member.findMany({
-        where: {
-            tenantId: tenant.id,
-            status: 'active',
-            role: 'member',
-            ...(await groupFilter(tenant.id, opts.groupId)),
-        },
-        include: { groups: { include: { group: true } } },
+    const members = await db.member.findMany({
+        where: { status: 'active', role: 'member', ...groupScope(opts.groupId) },
+        include: withGroups,
     });
 
     const rows: InactiveRow[] = [];
@@ -94,40 +99,21 @@ export async function findInactive(
     for (const m of members) {
         const tz = safeTz(m.timezone);
 
-        // Bugun allaqachon ovqat yuborgan bo'lsa — u "yo'qolgan" emas, ogohlantirmaymiz.
+        // Bugun allaqachon ovqat yuborgan bo'lsa — u "yo'qolgan" emas.
         // Aks holda ertalab nonushta yuborgan odam ham ro'yxatga tushib qolardi.
-        const activeToday = await prisma.mealRecord.count({
+        const activeToday = await db.mealRecord.count({
             where: { memberId: m.id, date: todayIn(tz), ...(meal ? { mealType: meal } : {}) },
         });
         if (activeToday > 0) continue;
 
         // Bugungi kun hali tugamagan — to'liq o'tgan kunlarni tekshiramiz
         const window = lastNDates(tz, days + 1).slice(0, days);
-        const mealsInWindow = await prisma.mealRecord.findMany({
-            where: {
-                memberId: m.id,
-                date: { in: window },
-                ...(meal ? { mealType: meal } : {}),
-            },
-            select: { date: true, mealType: true },
+        const inWindow = await db.mealRecord.count({
+            where: { memberId: m.id, date: { in: window }, ...(meal ? { mealType: meal } : {}) },
         });
+        if (inWindow > 0) continue;
 
-        const expectedPerDay = meal ? 1 : MEAL_TYPES.length;
-        const missedDetail: string[] = [];
-        for (const date of window) {
-            const forDate = mealsInWindow.filter(r => r.date === date);
-            if (forDate.length < expectedPerDay) {
-                const missing = (meal ? [meal] : [...MEAL_TYPES]).filter(
-                    t => !forDate.some(r => r.mealType === t),
-                );
-                missedDetail.push(`${date}: ${missing.map(t => MEAL_LABELS[t]).join(', ')}`);
-            }
-        }
-
-        const missedCount = missedDetail.length;
-        if (missedCount < (opts.minMissed ?? days)) continue; // hammasini o'tkazib yuborgan bo'lishi kerak
-
-        const last = await prisma.mealRecord.findFirst({
+        const last = await db.mealRecord.findFirst({
             where: { memberId: m.id, ...(meal ? { mealType: meal } : {}) },
             orderBy: { date: 'desc' },
             select: { date: true },
@@ -140,103 +126,65 @@ export async function findInactive(
             : null;
 
         rows.push({
-            id: m.id,
-            telegramId: m.telegramId,
-            name: m.name,
-            username: m.username,
-            role: m.role,
-            status: m.status,
-            timezone: m.timezone,
-            groups: m.groups.map(g => g.group.title || g.group.chatId),
+            ...brief(m),
             lastMealDate: last?.date ?? null,
             daysSince,
-            missedCount,
-            missedDetail,
+            missedCount: days,
         });
     }
 
-    rows.sort((a, b) => (b.daysSince ?? 999) - (a.daysSince ?? 999));
+    rows.sort((a, b) => (b.daysSince ?? 9999) - (a.daysSince ?? 9999));
     return rows;
 }
 
-/// Bugun ma'lum ovqatni hali yubormaganlar
+/// Bugun ma'lum ovqatni hali yubormaganlar (barcha guruhlar bo'ylab)
 export async function findMissingToday(
-    tenant: Tenant,
+    db: TenantClient,
     opts: { mealType?: MealType | 'any'; groupId?: string | null } = {},
-): Promise<MemberBrief[]> {
-    const members = await prisma.member.findMany({
-        where: {
-            tenantId: tenant.id,
-            status: 'active',
-            role: 'member',
-            ...(await groupFilter(tenant.id, opts.groupId)),
-        },
-        include: { groups: { include: { group: true } } },
+): Promise<Array<MemberBrief & { missing: MealType[] }>> {
+    const members = await db.member.findMany({
+        where: { status: 'active', role: 'member', ...groupScope(opts.groupId) },
+        include: withGroups,
     });
 
-    const out: MemberBrief[] = [];
+    const out: Array<MemberBrief & { missing: MealType[] }> = [];
     for (const m of members) {
         const date = todayIn(safeTz(m.timezone));
-        const records = await prisma.mealRecord.findMany({
-            where: { memberId: m.id, date },
-            select: { mealType: true },
-        });
+        const records = await db.mealRecord.findMany({ where: { memberId: m.id, date }, select: { mealType: true } });
         const needed = opts.mealType && opts.mealType !== 'any' ? [opts.mealType] : [...MEAL_TYPES];
         const missing = needed.filter(t => !records.some(r => r.mealType === t));
         if (missing.length === 0) continue;
-        out.push({
-            id: m.id,
-            telegramId: m.telegramId,
-            name: m.name,
-            username: m.username,
-            role: m.role,
-            status: m.status,
-            timezone: m.timezone,
-            groups: m.groups.map(g => g.group.title || g.group.chatId),
-        });
+        out.push({ ...brief(m), missing });
     }
     return out;
 }
 
-/// Davr bo'yicha statistika (intizom foizi)
+/// Davr bo'yicha intizom statistikasi
 export async function getStats(
+    db: TenantClient,
     tenant: Tenant,
     opts: { days?: number; groupId?: string | null } = {},
 ): Promise<{ rows: StatsRow[]; days: number; from: string; to: string }> {
     const days = Math.max(1, Math.min(90, opts.days ?? 7));
-    const members = await prisma.member.findMany({
-        where: {
-            tenantId: tenant.id,
-            status: 'active',
-            role: 'member',
-            ...(await groupFilter(tenant.id, opts.groupId)),
-        },
-        include: { groups: { include: { group: true } } },
+    const members = await db.member.findMany({
+        where: { status: 'active', role: 'member', ...groupScope(opts.groupId) },
+        include: withGroups,
     });
 
     const rows: StatsRow[] = [];
     for (const m of members) {
-        const tz = safeTz(m.timezone);
-        const window = lastNDates(tz, days);
-        const records = await prisma.mealRecord.findMany({
+        const window = lastNDates(safeTz(m.timezone), days);
+        const records = await db.mealRecord.findMany({
             where: { memberId: m.id, date: { in: window } },
             select: { status: true },
         });
         const expected = days * MEAL_TYPES.length;
         const done = records.length;
-        const late = records.filter(r => r.status === 'late').length;
         rows.push({
-            id: m.id,
-            telegramId: m.telegramId,
-            name: m.name,
-            username: m.username,
-            role: m.role,
-            status: m.status,
-            timezone: m.timezone,
-            groups: m.groups.map(g => g.group.title || g.group.chatId),
+            ...brief(m),
             expected,
             done,
-            late,
+            late: records.filter(r => r.status === 'late').length,
             missed: expected - done,
             rate: expected ? Math.round((done / expected) * 100) : 0,
         });
@@ -247,19 +195,16 @@ export async function getStats(
     return { rows, days, from: daysAgoIn(tz, days - 1), to: todayIn(tz) };
 }
 
-/// Bitta a'zoning batafsil hisoboti
-export async function memberReport(tenant: Tenant, memberId: string, days = 7) {
-    const member = await prisma.member.findFirst({
-        where: { id: memberId, tenantId: tenant.id },
-        include: { groups: { include: { group: true } } },
-    });
+/// Bitta a'zoning kunma-kun hisoboti
+export async function memberReport(db: TenantClient, memberId: string, days = 7) {
+    const member = await db.member.findUnique({ where: { id: memberId }, include: withGroups });
     if (!member) return null;
 
     const tz = safeTz(member.timezone);
     const window = lastNDates(tz, days);
-    const records = await prisma.mealRecord.findMany({
+    const records = await db.mealRecord.findMany({
         where: { memberId: member.id, date: { in: window } },
-        orderBy: [{ date: 'asc' }],
+        orderBy: { date: 'asc' },
     });
 
     const byDate = window.map(date => ({
@@ -273,44 +218,63 @@ export async function memberReport(tenant: Tenant, memberId: string, days = 7) {
     return { member, days, byDate, total: records.length, expected: days * MEAL_TYPES.length };
 }
 
-/// A'zoni ism/username/id bo'yicha izlash — AI "Aliga xabar yubor" deganda kerak
-export async function searchMembers(tenantId: string, query: string): Promise<MemberBrief[]> {
+/// A'zolarni ism/username bo'yicha izlash.
+/// SQLite'da `mode: 'insensitive'` yo'q — shuning uchun nameLc ustuni ishlatiladi.
+export async function searchMembers(db: TenantClient, query: string): Promise<MemberBrief[]> {
     const q = query.trim();
     if (!q) return [];
-    const members = await prisma.member.findMany({
-        where: {
-            tenantId,
-            OR: [
-                { name: { contains: q, mode: 'insensitive' } },
-                { username: { contains: q, mode: 'insensitive' } },
-                { telegramId: q },
-            ],
-        },
-        include: { groups: { include: { group: true } } },
+    const lc = q.toLowerCase();
+    const members = await db.member.findMany({
+        where: { OR: [{ nameLc: { contains: lc } }, { telegramId: q }] },
+        include: withGroups,
         take: 25,
     });
-    return members.map(m => ({
-        id: m.id,
-        telegramId: m.telegramId,
-        name: m.name,
-        username: m.username,
-        role: m.role,
-        status: m.status,
-        timezone: m.timezone,
-        groups: m.groups.map(g => g.group.title || g.group.chatId),
-    }));
+
+    // username uchun alohida — kichik harfga keltirib qo'lda solishtiramiz
+    const byUsername = await db.member.findMany({
+        where: { username: { not: null } },
+        include: withGroups,
+        take: 200,
+    });
+    const extra = byUsername.filter(
+        m => (m.username ?? '').toLowerCase().includes(lc) && !members.some(x => x.id === m.id),
+    );
+
+    return [...members, ...extra].slice(0, 25).map(brief);
 }
 
-// ============ MATNGA AYLANTIRISH (bot javoblari uchun) ============
+// ============ MATNGA AYLANTIRISH ============
 
-export function formatInactive(rows: InactiveRow[], days: number): string {
-    if (rows.length === 0) return `✅ Oxirgi ${days} kunda hamma o'z ratsionini yuborgan. Ajoyib!`;
-    const lines = rows.map((r, i) => {
-        const since = r.daysSince === null ? 'hech qachon' : `${r.daysSince} kun oldin`;
-        const grp = r.groups.length ? ` · ${esc(r.groups.join(', '))}` : '';
-        return `${i + 1}. <b>${esc(r.name)}</b> — oxirgi: ${since}${grp}`;
-    });
-    return [`⚠️ <b>Oxirgi ${days} kunda yubormaganlar (${rows.length})</b>`, '', ...lines].join('\n');
+/// Yubormaganlar ro'yxati — GURUHLAR BO'YICHA guruhlab ko'rsatiladi,
+/// shunda murabbiy bir qarashda qaysi guruhda muammo borligini ko'radi.
+export function formatInactive(rows: InactiveRow[], days: number, totalGroups: number): string {
+    if (rows.length === 0) {
+        return `✅ Oxirgi ${days} kunda barcha guruhlarda hamma o'z ratsionini yuborgan. Ajoyib!`;
+    }
+
+    const byGroup = new Map<string, InactiveRow[]>();
+    for (const r of rows) {
+        const keys = r.groups.length ? r.groups : ['(guruhsiz)'];
+        for (const k of keys) {
+            if (!byGroup.has(k)) byGroup.set(k, []);
+            byGroup.get(k)!.push(r);
+        }
+    }
+
+    const lines: string[] = [
+        `⚠️ <b>Oxirgi ${days} kunda yubormaganlar</b>`,
+        `Jami <b>${rows.length}</b> kishi · ${byGroup.size}/${totalGroups} guruhda`,
+    ];
+
+    for (const [groupName, members] of [...byGroup.entries()].sort((a, b) => b[1].length - a[1].length)) {
+        lines.push('', `<b>${esc(groupName)}</b> — ${members.length} kishi`);
+        for (const r of members) {
+            const since = r.daysSince === null ? 'hech qachon' : `${r.daysSince} kun`;
+            lines.push(`  • ${esc(r.name)} <i>(${since})</i>`);
+        }
+    }
+
+    return lines.join('\n');
 }
 
 export function formatStats(res: { rows: StatsRow[]; days: number; from: string; to: string }): string {
@@ -330,8 +294,24 @@ export function formatStats(res: { rows: StatsRow[]; days: number; from: string;
     ].join('\n');
 }
 
-export function formatMissingToday(rows: MemberBrief[], mealLabel: string): string {
-    if (rows.length === 0) return `✅ Bugun ${mealLabel} bo'yicha hamma yuborgan.`;
-    const lines = rows.map((r, i) => `${i + 1}. ${esc(r.name)}`);
-    return [`⏳ <b>Bugun ${mealLabel} yubormaganlar (${rows.length})</b>`, '', ...lines].join('\n');
+/// Bugun yubormaganlar — guruhlar bo'yicha, qaysi ovqat yetishmayotgani bilan
+export function formatMissingToday(rows: Array<MemberBrief & { missing: MealType[] }>): string {
+    if (rows.length === 0) return '✅ Bugun barcha guruhlarda hamma ovqatini yuborgan.';
+
+    const byGroup = new Map<string, Array<MemberBrief & { missing: MealType[] }>>();
+    for (const r of rows) {
+        for (const k of r.groups.length ? r.groups : ['(guruhsiz)']) {
+            if (!byGroup.has(k)) byGroup.set(k, []);
+            byGroup.get(k)!.push(r);
+        }
+    }
+
+    const lines: string[] = [`⏳ <b>Bugun to'liq yubormaganlar — ${rows.length} kishi</b>`];
+    for (const [groupName, members] of [...byGroup.entries()].sort((a, b) => b[1].length - a[1].length)) {
+        lines.push('', `<b>${esc(groupName)}</b>`);
+        for (const r of members) {
+            lines.push(`  • ${esc(r.name)} — ${r.missing.map(m => MEAL_LABELS[m]).join(', ')}`);
+        }
+    }
+    return lines.join('\n');
 }

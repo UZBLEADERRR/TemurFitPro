@@ -1,39 +1,60 @@
-import { prisma } from '../core/db';
+import { prisma, tenantDb } from '../core/db';
 
-/// Ko'p bosqichli dialoglar holati DB'da saqlanadi — Railway restart qilsa ham yo'qolmaydi.
+/// Ko'p bosqichli dialoglar holati bazada saqlanadi — Railway restart qilsa ham yo'qolmaydi.
 export interface SessionState<T = Record<string, unknown>> {
     state: string;
     payload: T;
 }
 
-export async function getState(scope: string, chatId: string): Promise<SessionState> {
-    const row = await prisma.botSession.findUnique({ where: { scope_chatId: { scope, chatId } } });
-    if (!row) return { state: 'idle', payload: {} };
-    let payload: Record<string, unknown> = {};
+const IDLE: SessionState = { state: 'idle', payload: {} };
+
+function parse(row: { state: string; payload: string } | null): SessionState {
+    if (!row) return IDLE;
     try {
-        payload = JSON.parse(row.payload);
+        return { state: row.state, payload: JSON.parse(row.payload) };
     } catch {
-        payload = {};
+        return { state: row.state, payload: {} };
     }
-    return { state: row.state, payload };
 }
 
-export async function setState(
-    scope: string,
+// ---------- Ona bot ----------
+
+export async function getControlState(chatId: string): Promise<SessionState> {
+    return parse(await prisma.controlSession.findUnique({ where: { chatId } }));
+}
+
+export async function setControlState(
     chatId: string,
     state: string,
     payload: Record<string, unknown> = {},
-    tenantId?: string,
 ): Promise<void> {
-    await prisma.botSession.upsert({
-        where: { scope_chatId: { scope, chatId } },
-        create: { scope, chatId, state, payload: JSON.stringify(payload), tenantId: tenantId ?? null },
-        update: { state, payload: JSON.stringify(payload) },
-    });
+    const data = { state, payload: JSON.stringify(payload) };
+    await prisma.controlSession.upsert({ where: { chatId }, create: { chatId, ...data }, update: data });
 }
 
-export async function clearState(scope: string, chatId: string): Promise<void> {
-    await prisma.botSession
-        .delete({ where: { scope_chatId: { scope, chatId } } })
-        .catch(() => undefined);
+export async function clearControlState(chatId: string): Promise<void> {
+    await prisma.controlSession.delete({ where: { chatId } }).catch(() => undefined);
+}
+
+// ---------- Mijoz boti ----------
+
+export async function getTenantState(botId: string, chatId: string): Promise<SessionState> {
+    const db = await tenantDb(botId);
+    return parse(await db.botSession.findUnique({ where: { chatId } }));
+}
+
+export async function setTenantState(
+    botId: string,
+    chatId: string,
+    state: string,
+    payload: Record<string, unknown> = {},
+): Promise<void> {
+    const db = await tenantDb(botId);
+    const data = { state, payload: JSON.stringify(payload) };
+    await db.botSession.upsert({ where: { chatId }, create: { chatId, ...data }, update: data });
+}
+
+export async function clearTenantState(botId: string, chatId: string): Promise<void> {
+    const db = await tenantDb(botId);
+    await db.botSession.delete({ where: { chatId } }).catch(() => undefined);
 }

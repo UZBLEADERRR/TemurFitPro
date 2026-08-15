@@ -1,7 +1,9 @@
 import cron from 'node-cron';
 import { differenceInMinutes } from 'date-fns';
-import type { Tenant, Group, Member } from '@prisma/client';
-import { prisma } from './core/db';
+import type { Tenant } from './generated/platform';
+import type { Group, Member } from './generated/tenant';
+import type { TenantClient } from './core/db';
+import { prisma, tenantDb } from './core/db';
 import { getBotByTenant } from './core/registry';
 import { log } from './core/logger';
 import { mention, withRetry, tgError } from './core/telegram';
@@ -23,9 +25,7 @@ export function startScheduler(): void {
         try {
             await runReminders();
             const res = await processOutbox();
-            if (res.sent || res.failed) {
-                log.info('scheduler', `outbox: ${res.sent} yuborildi, ${res.failed} xato`);
-            }
+            if (res.sent || res.failed) log.info('scheduler', `outbox: ${res.sent} yuborildi, ${res.failed} xato`);
         } catch (e) {
             log.error('scheduler', 'daqiqalik tsikl xatosi', e);
         } finally {
@@ -42,15 +42,22 @@ export function startScheduler(): void {
         }
     });
 
-    // ===== Har kuni 03:00 (UTC): eski yozuvlarni tozalash =====
+    // ===== Har kuni 03:00 UTC: eski yozuvlarni tozalash =====
     cron.schedule('0 3 * * *', async () => {
         try {
             const cutoff = new Date(Date.now() - 30 * 24 * 3600_000);
-            const sent = await prisma.outboundMessage.deleteMany({
-                where: { status: { in: ['sent', 'cancelled'] }, sentAt: { lt: cutoff } },
-            });
+            let removed = 0;
+            const tenants = await prisma.tenant.findMany();
+            for (const t of tenants) {
+                const db = await tenantDb(t.botId);
+                removed += (
+                    await db.outboundMessage.deleteMany({
+                        where: { status: { in: ['sent', 'cancelled'] }, sentAt: { lt: cutoff } },
+                    })
+                ).count;
+            }
             const logs = await prisma.auditLog.deleteMany({ where: { createdAt: { lt: cutoff } } });
-            log.info('scheduler', `tozalandi: ${sent.count} xabar, ${logs.count} audit yozuv`);
+            log.info('scheduler', `tozalandi: ${removed} xabar, ${logs.count} audit yozuv`);
         } catch (e) {
             log.error('scheduler', 'tozalash xatosi', e);
         }
@@ -65,21 +72,19 @@ async function runReminders(): Promise<void> {
     const tenants = await prisma.tenant.findMany({ where: { status: 'active' } });
 
     for (const tenant of tenants) {
-        const bot = getBotByTenant(tenant.id);
-        if (!bot) continue;
-        if (tenant.maxReminders === 0) continue;
+        if (!getBotByTenant(tenant.id) || tenant.maxReminders === 0) continue;
 
-        const groups = await prisma.group.findMany({ where: { tenantId: tenant.id, isActive: true } });
-        if (groups.length === 0) continue;
+        const db = await tenantDb(tenant.botId);
+        const groups = await db.group.findMany({ where: { isActive: true } });
 
         for (const group of groups) {
-            const links = await prisma.groupMember.findMany({
+            const links = await db.groupMember.findMany({
                 where: { groupId: group.id, member: { status: 'active', role: 'member' } },
                 include: { member: true },
             });
 
             for (const link of links) {
-                await remindMember(tenant, group, link.member).catch(e =>
+                await remindMember(db, tenant, group, link.member).catch(e =>
                     log.warn('scheduler', `eslatma xatosi (${link.member.name}): ${tgError(e)}`),
                 );
             }
@@ -87,7 +92,7 @@ async function runReminders(): Promise<void> {
     }
 }
 
-async function remindMember(tenant: Tenant, group: Group, member: Member): Promise<void> {
+async function remindMember(db: TenantClient, tenant: Tenant, group: Group, member: Member): Promise<void> {
     const tz = safeTz(member.timezone);
     const nowMin = localMinutes(tz);
     const date = todayIn(tz);
@@ -99,21 +104,19 @@ async function remindMember(tenant: Tenant, group: Group, member: Member): Promi
         // Eslatma oynasi: ovqat vaqti + grace dan keyingi ovqat vaqtigacha
         if (nowMin <= target + tenant.graceMinutes || nowMin > windowEnd) continue;
 
-        const muted = await prisma.reminderOverride.findUnique({
+        const muted = await db.reminderOverride.findUnique({
             where: { memberId_mealType: { memberId: member.id, mealType: meal } },
         });
         if (muted?.muted) continue;
 
-        const already = await prisma.mealRecord.findUnique({
+        const already = await db.mealRecord.findUnique({
             where: { memberId_date_mealType: { memberId: member.id, date, mealType: meal } },
         });
         if (already) continue;
 
-        const existing = await prisma.mention.findUnique({
+        const existing = await db.mention.findUnique({
             where: {
-                groupId_memberId_mealType_date: {
-                    groupId: group.id, memberId: member.id, mealType: meal, date,
-                },
+                groupId_memberId_mealType_date: { groupId: group.id, memberId: member.id, mealType: meal, date },
             },
         });
 
@@ -122,11 +125,12 @@ async function remindMember(tenant: Tenant, group: Group, member: Member): Promi
             if (differenceInMinutes(new Date(), existing.updatedAt) < tenant.reminderInterval) continue;
         }
 
-        await sendReminder(tenant, group, member, meal, date, existing?.messageId ?? null, existing?.count ?? 0);
+        await sendReminder(db, tenant, group, member, meal, date, existing?.messageId ?? null, existing?.count ?? 0);
     }
 }
 
 async function sendReminder(
+    db: TenantClient,
     tenant: Tenant,
     group: Group,
     member: Member,
@@ -157,14 +161,11 @@ async function sendReminder(
             }),
         );
 
-        await prisma.mention.upsert({
+        await db.mention.upsert({
             where: {
-                groupId_memberId_mealType_date: {
-                    groupId: group.id, memberId: member.id, mealType: meal, date,
-                },
+                groupId_memberId_mealType_date: { groupId: group.id, memberId: member.id, mealType: meal, date },
             },
             create: {
-                tenantId: tenant.id,
                 groupId: group.id,
                 memberId: member.id,
                 mealType: meal,
@@ -192,7 +193,8 @@ async function runDailyTables(): Promise<void> {
         if (hour !== tenant.dailyTableHour) continue;
 
         const today = todayIn(tz);
-        const groups = await prisma.group.findMany({ where: { tenantId: tenant.id, isActive: true } });
+        const db = await tenantDb(tenant.botId);
+        const groups = await db.group.findMany({ where: { isActive: true } });
 
         for (const group of groups) {
             if (group.lastTableDate === today) continue;
@@ -201,20 +203,20 @@ async function runDailyTables(): Promise<void> {
             if (bot && group.pinnedMessageId) {
                 await bot.telegram.unpinChatMessage(group.chatId, group.pinnedMessageId).catch(() => undefined);
             }
-            await createAndPinTable(tenant, group);
+            await createAndPinTable(db, tenant, group);
             log.info('scheduler', `kunlik jadval: ${group.title || group.chatId} (${today})`);
         }
     }
 }
 
-/// Barcha guruhlarning jadvalini majburan yangilash (API/AI uchun)
+/// Barcha guruhlarning jadvalini majburan yangilash
 export async function refreshAllTables(): Promise<number> {
     const tenants = await prisma.tenant.findMany({ where: { status: 'active' } });
     let n = 0;
     for (const t of tenants) {
-        const groups = await prisma.group.findMany({ where: { tenantId: t.id, isActive: true } });
-        for (const g of groups) {
-            await updateGroupTable(t, g).catch(() => undefined);
+        const db = await tenantDb(t.botId);
+        for (const g of await db.group.findMany({ where: { isActive: true } })) {
+            await updateGroupTable(db, t, g).catch(() => undefined);
             n++;
         }
     }

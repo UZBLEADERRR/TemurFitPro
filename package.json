@@ -8,12 +8,13 @@
     "node": ">=20"
   },
   "scripts": {
-    "start": "npx prisma db push --accept-data-loss --skip-generate && npx tsx src/index.ts",
-    "dev": "npx tsx watch src/index.ts",
-    "build": "npx tsc --noEmit && cd client && npm install && npm run build",
-    "typecheck": "npx tsc --noEmit",
-    "postinstall": "npx prisma generate",
-    "migrate": "npx prisma migrate deploy"
+    "start": "node scripts/prestart.js && npx tsx src/index.ts",
+    "dev": "node scripts/prestart.js && npx tsx watch src/index.ts",
+    "build": "npm run generate && npx tsc --noEmit && cd client && npm install && npm run build",
+    "typecheck": "npm run generate && npx tsc --noEmit",
+    "generate": "npx prisma generate --schema prisma/platform.prisma && npx prisma generate --schema prisma/tenant.prisma",
+    "sql:tenant": "npx prisma migrate diff --from-empty --to-schema-datamodel prisma/tenant.prisma --script > prisma/tenant-init.sql",
+    "postinstall": "npm run generate"
   },
   "license": "ISC",
   "dependencies": {

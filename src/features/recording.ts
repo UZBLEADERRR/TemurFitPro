@@ -1,6 +1,7 @@
 import type { Context } from 'telegraf';
-import type { Tenant, Member, Group } from '@prisma/client';
-import { prisma } from '../core/db';
+import type { Tenant } from '../generated/platform';
+import type { Member, Group } from '../generated/tenant';
+import type { TenantClient } from '../core/db';
 import { detectMealType, mealTargetMinutes, MEAL_LABELS, MealType } from '../core/meals';
 import { todayIn, daysAgoIn, localMinutes, hhmmToMinutes, safeTz } from '../core/time';
 import { refreshTablesForMember } from './table';
@@ -16,6 +17,7 @@ export interface RecordResult {
 
 /// Ovqat qaydini yozish. Sana va "kech qoldi"mi — a'zoning O'Z vaqt mintaqasida hisoblanadi.
 export async function recordMeal(
+    db: TenantClient,
     tenant: Tenant,
     member: Member,
     group: Group | null,
@@ -38,10 +40,9 @@ export async function recordMeal(
         status = 'late';
     }
 
-    await prisma.mealRecord.upsert({
+    await db.mealRecord.upsert({
         where: { memberId_date_mealType: { memberId: member.id, date, mealType: meal } },
         create: {
-            tenantId: tenant.id,
             memberId: member.id,
             groupId: group?.id ?? null,
             date,
@@ -62,7 +63,7 @@ export async function recordMeal(
         },
     });
 
-    await clearMentions(tenant, member.id, meal, date);
+    await clearMentions(db, tenant, member.id, meal, date);
     void refreshTablesForMember(tenant, member.id).catch(e =>
         log.warn('recording', `jadval yangilanmadi: ${tgError(e)}`),
     );
@@ -71,10 +72,16 @@ export async function recordMeal(
 }
 
 /// Ovqat kelgach, o'sha ovqat uchun yuborilgan eslatma xabarlarini guruhdan o'chirish
-async function clearMentions(tenant: Tenant, memberId: string, meal: MealType, date: string): Promise<void> {
+async function clearMentions(
+    db: TenantClient,
+    tenant: Tenant,
+    memberId: string,
+    meal: MealType,
+    date: string,
+): Promise<void> {
     if (!tenant.autoDeleteReminders) return;
     const bot = getBotByTenant(tenant.id);
-    const mentions = await prisma.mention.findMany({
+    const mentions = await db.mention.findMany({
         where: { memberId, mealType: meal, date },
         include: { group: true },
     });
@@ -86,12 +93,17 @@ async function clearMentions(tenant: Tenant, memberId: string, meal: MealType, d
                 /* xabar allaqachon o'chirilgan bo'lishi mumkin */
             }
         }
-        await prisma.mention.delete({ where: { id: m.id } }).catch(() => undefined);
+        await db.mention.delete({ where: { id: m.id } }).catch(() => undefined);
     }
 }
 
-/// Guruhdagi rasm/hujjat xabarini qayta ishlash. Qayd etilgan bo'lsa true qaytaradi.
-export async function handleGroupMeal(ctx: Context, tenant: Tenant, group: Group): Promise<boolean> {
+/// Guruhdagi rasm/video xabarini qayta ishlash. Qayd etilgan bo'lsa true qaytaradi.
+export async function handleGroupMeal(
+    ctx: Context,
+    db: TenantClient,
+    tenant: Tenant,
+    group: Group,
+): Promise<boolean> {
     const msg = ctx.message as any;
     if (!msg || !ctx.from) return false;
 
@@ -101,37 +113,34 @@ export async function handleGroupMeal(ctx: Context, tenant: Tenant, group: Group
 
     const hasPhoto = Array.isArray(msg.photo) && msg.photo.length > 0;
     const hasVideo = !!msg.video;
-    if (tenant.requirePhoto && !hasPhoto && !hasVideo) {
-        return false; // Faqat matnli hashtag — qayd etilmaydi
-    }
+    if (tenant.requirePhoto && !hasPhoto && !hasVideo) return false;
 
     const telegramId = String(ctx.from.id);
-    let member = await prisma.member.findUnique({
-        where: { tenantId_telegramId: { tenantId: tenant.id, telegramId } },
-    });
+    let member = await db.member.findUnique({ where: { telegramId } });
 
     if (!member) {
         // Guruhda ko'ringan yangi odamni avtomatik ro'yxatga olamiz —
-        // eski botda /start majburiy edi, bu esa ko'p qaydlarni yo'qotardi.
-        member = await prisma.member.create({
+        // /start majburiy bo'lsa ko'p qaydlar yo'qolardi.
+        const name = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(' ') || 'Foydalanuvchi';
+        member = await db.member.create({
             data: {
-                tenantId: tenant.id,
                 telegramId,
-                name: [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(' ') || 'Foydalanuvchi',
+                name,
+                nameLc: name.toLowerCase(),
                 username: ctx.from.username ?? null,
                 timezone: tenant.timezone,
             },
         });
     }
 
-    await prisma.groupMember.upsert({
+    await db.groupMember.upsert({
         where: { groupId_memberId: { groupId: group.id, memberId: member.id } },
         create: { groupId: group.id, memberId: member.id },
         update: {},
     });
 
     const photoFileId = hasPhoto ? msg.photo[msg.photo.length - 1].file_id : msg.video?.file_id;
-    const result = await recordMeal(tenant, member, group, meal, {
+    const result = await recordMeal(db, tenant, member, group, meal, {
         photoFileId,
         messageId: msg.message_id,
         caption,

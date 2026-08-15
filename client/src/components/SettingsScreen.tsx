@@ -3,7 +3,7 @@ import { api, type Settings, type BusinessInfo } from '../lib/api';
 import { Card, Switch, Loading } from './bits';
 import { haptic } from '../lib/telegram';
 
-export default function SettingsScreen({ agentName }: { agentName: string }) {
+export default function SettingsScreen() {
     const [s, setS] = useState<Settings | null>(null);
     const [biz, setBiz] = useState<BusinessInfo | null>(null);
     const [dirty, setDirty] = useState(false);
@@ -121,30 +121,6 @@ export default function SettingsScreen({ agentName }: { agentName: string }) {
                         <div className="desc">O'chsa, faqat hashtag ham qabul qilinadi</div>
                     </div>
                     <Switch on={s.requirePhoto} onChange={v => patch('requirePhoto', v)} />
-                </div>
-            </Card>
-
-            <Card title={`${agentName} — AI yordamchi`}>
-                <div className="field">
-                    <label>Ismi</label>
-                    <input
-                        type="text"
-                        value={s.agentName}
-                        maxLength={40}
-                        onChange={e => patch('agentName', e.target.value)}
-                    />
-                </div>
-                <div style={{ paddingTop: 10 }}>
-                    <label style={{ fontSize: 14 }}>Yozish uslubim</label>
-                    <div className="desc" style={{ fontSize: 12, color: 'var(--hint)', margin: '2px 0 8px' }}>
-                        AI a'zolarga xabarlarni aynan shu uslubda yozadi
-                    </div>
-                    <textarea
-                        value={s.coachStyle}
-                        maxLength={2000}
-                        placeholder="Masalan: Qisqa yozaman, hurmat bilan lekin qat'iy. Doim ismini aytaman va oxirida bitta motivatsion jumla qo'shaman."
-                        onChange={e => patch('coachStyle', e.target.value)}
-                    />
                 </div>
             </Card>
 

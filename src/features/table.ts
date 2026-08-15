@@ -1,5 +1,7 @@
-import type { Group, Tenant } from '@prisma/client';
-import { prisma } from '../core/db';
+import type { Tenant } from '../generated/platform';
+import type { TenantClient } from '../core/db';
+import type { Group } from '../generated/tenant';
+import { tenantDb } from '../core/db';
 import { getBotByTenant } from '../core/registry';
 import { MEAL_TYPES, MealType } from '../core/meals';
 import { todayIn, safeTz } from '../core/time';
@@ -19,8 +21,8 @@ interface Row {
 /// Guruhning bugungi holatini qatorlarga yig'ish.
 /// Har bir a'zoning sanasi O'ZINING vaqt mintaqasida hisoblanadi —
 /// Koreyadagi va O'zbekistondagi a'zolar bir jadvalda to'g'ri ko'rinadi.
-async function buildRows(tenant: Tenant, group: Group): Promise<Row[]> {
-    const links = await prisma.groupMember.findMany({
+async function buildRows(db: TenantClient, group: Group): Promise<Row[]> {
+    const links = await db.groupMember.findMany({
         where: { groupId: group.id, member: { status: 'active' } },
         include: { member: true },
         orderBy: { joinedAt: 'asc' },
@@ -30,9 +32,7 @@ async function buildRows(tenant: Tenant, group: Group): Promise<Row[]> {
     for (const link of links) {
         const member = link.member;
         const date = todayIn(safeTz(member.timezone));
-        const records = await prisma.mealRecord.findMany({
-            where: { memberId: member.id, date },
-        });
+        const records = await db.mealRecord.findMany({ where: { memberId: member.id, date } });
         const marks = {} as Record<MealType, string>;
         for (const meal of MEAL_TYPES) {
             const rec = records.find(r => r.mealType === meal);
@@ -43,18 +43,14 @@ async function buildRows(tenant: Tenant, group: Group): Promise<Row[]> {
     return rows;
 }
 
-export async function renderTable(tenant: Tenant, group: Group): Promise<string> {
-    const rows = await buildRows(tenant, group);
+export async function renderTable(db: TenantClient, tenant: Tenant, group: Group): Promise<string> {
+    const rows = await buildRows(db, group);
     const dateStr = todayIn(safeTz(tenant.timezone));
 
-    const header = [
-        `<b>💪 ${esc(group.title || 'Ratsion jadvali')}</b>`,
-        `📅 ${dateStr}`,
-        '',
-    ];
+    const header = [`<b>💪 ${esc(group.title || 'Ratsion jadvali')}</b>`, `📅 ${dateStr}`, ''];
 
     if (rows.length === 0) {
-        return [...header, "Hali a'zolar yo'q. Botga /start bosib ro'yxatdan o'ting."].join('\n');
+        return [...header, "Hali a'zolar yo'q. Guruhga ovqat rasmini hashtag bilan yuboring."].join('\n');
     }
 
     const width = Math.min(14, Math.max(...rows.map(r => r.name.length)));
@@ -82,11 +78,11 @@ function keyboard(tenantId: string) {
 }
 
 /// Pinlangan jadvalni yangilash. Xabar o'chirilgan bo'lsa — qaytadan yaratib pinlaydi.
-export async function updateGroupTable(tenant: Tenant, group: Group): Promise<void> {
+export async function updateGroupTable(db: TenantClient, tenant: Tenant, group: Group): Promise<void> {
     const bot = getBotByTenant(tenant.id);
     if (!bot) return;
 
-    const text = await renderTable(tenant, group);
+    const text = await renderTable(db, tenant, group);
     const reply_markup = keyboard(tenant.id);
 
     if (group.pinnedMessageId) {
@@ -98,7 +94,6 @@ export async function updateGroupTable(tenant: Tenant, group: Group): Promise<vo
             return;
         } catch (e) {
             const desc = tgError(e);
-            // Matn o'zgarmagan bo'lsa — bu xato emas
             if (desc.includes('message is not modified')) return;
             if (!desc.includes('message to edit not found') && !desc.includes("message can't be edited")) {
                 log.warn('table', `jadval yangilanmadi (${group.chatId}): ${desc}`);
@@ -108,27 +103,29 @@ export async function updateGroupTable(tenant: Tenant, group: Group): Promise<vo
         }
     }
 
-    await createAndPinTable(tenant, group, text);
+    await createAndPinTable(db, tenant, group, text);
 }
 
-export async function createAndPinTable(tenant: Tenant, group: Group, text?: string): Promise<void> {
+export async function createAndPinTable(
+    db: TenantClient,
+    tenant: Tenant,
+    group: Group,
+    text?: string,
+): Promise<void> {
     const bot = getBotByTenant(tenant.id);
     if (!bot) return;
-    const body = text ?? (await renderTable(tenant, group));
+    const body = text ?? (await renderTable(db, tenant, group));
 
     try {
         const msg = await withRetry(() =>
-            bot.telegram.sendMessage(group.chatId, body, {
-                parse_mode: 'HTML',
-                reply_markup: keyboard(tenant.id),
-            }),
+            bot.telegram.sendMessage(group.chatId, body, { parse_mode: 'HTML', reply_markup: keyboard(tenant.id) }),
         );
         try {
             await bot.telegram.pinChatMessage(group.chatId, msg.message_id, { disable_notification: true });
         } catch (e) {
             log.warn('table', `pin qilinmadi (${group.chatId}): ${tgError(e)}`);
         }
-        await prisma.group.update({
+        await db.group.update({
             where: { id: group.id },
             data: { pinnedMessageId: msg.message_id, lastTableDate: todayIn(safeTz(tenant.timezone)) },
         });
@@ -139,12 +136,13 @@ export async function createAndPinTable(tenant: Tenant, group: Group, text?: str
 
 /// Bitta a'zo ovqat yuborgach — u a'zo bo'lgan barcha guruhlar jadvalini yangilash
 export async function refreshTablesForMember(tenant: Tenant, memberId: string): Promise<void> {
-    const links = await prisma.groupMember.findMany({
+    const db = await tenantDb(tenant.botId);
+    const links = await db.groupMember.findMany({
         where: { memberId, group: { isActive: true } },
         include: { group: true },
     });
     for (const link of links) {
-        await updateGroupTable(tenant, link.group).catch(e =>
+        await updateGroupTable(db, tenant, link.group).catch(e =>
             log.warn('table', `refresh xatosi: ${tgError(e)}`),
         );
     }

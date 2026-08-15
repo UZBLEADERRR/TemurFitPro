@@ -39,7 +39,10 @@ export const api = {
     groups: () => request<GroupInfo[]>('/groups'),
     stats: (days: number, group?: string) =>
         request<Stats>(`/stats?days=${days}${group ? `&group=${group}` : ''}`),
-    inactive: (days: number) => request<InactiveRow[]>(`/inactive?days=${days}`),
+    inactive: (days: number, group?: string) =>
+        request<InactiveRow[]>(`/inactive?days=${days}${group ? `&group=${group}` : ''}`),
+    missingToday: (group?: string) =>
+        request<MissingRow[]>(`/missing-today${group ? `?group=${group}` : ''}`),
     members: (group?: string) => request<MemberBrief[]>(`/members${group ? `?group=${group}` : ''}`),
     member: (id: string, days = 14) => request<MemberDetail>(`/member/${id}?days=${days}`),
     streak: (member?: string) => request<Streak>(`/streak${member ? `?member=${member}` : ''}`),
@@ -60,7 +63,6 @@ export interface Me {
     member: { id: string; name: string; timezone: string; role: string } | null;
     tenant: {
         id: string;
-        agentName: string;
         botUsername: string;
         timezone: string;
         meals: Record<MealKey, string>;
@@ -121,6 +123,13 @@ export interface InactiveRow {
     groups: string[];
 }
 
+export interface MissingRow {
+    id: string;
+    name: string;
+    groups: string[];
+    missing: MealKey[];
+}
+
 export interface MemberDetail {
     member: { id: string; name: string; timezone: string; role: string };
     days: { date: string; meals: { meal: MealKey; status: string; at: string | null }[] }[];
@@ -134,8 +143,6 @@ export interface Streak {
 }
 
 export interface Settings {
-    agentName: string;
-    coachStyle: string;
     timezone: string;
     breakfastTime: string;
     lunchTime: string;

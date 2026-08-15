@@ -1,0 +1,181 @@
+// TENANT bazasi — HAR BIR BOT UCHUN ALOHIDA SQLite fayl:
+//   /data/tenants/<botId>.db
+//
+// Nega alohida fayl:
+//   · Mijoz ketsa — bitta faylni o'chirsa bo'ldi, hech qanday qoldiq qolmaydi
+//   · Bir mijozning ma'lumoti boshqasinikiga jismonan aralashmaydi
+//   · Zaxira nusxa ham, o'chirish ham fayl darajasida
+//
+// Fayl ichida guruhlar `groupId` bilan ajratilgan — shuning uchun bitta so'rov
+// bilan BARCHA guruhlar bo'ylab hisobot olish mumkin (murabbiyga shu kerak),
+// va istalgan bitta guruhni alohida tozalash ham oson.
+//
+// Bu yerda tenantId ustuni YO'Q — butun fayl bitta botga tegishli.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/tenant"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("TENANT_DATABASE_URL")
+}
+
+model Group {
+  id              String   @id @default(cuid())
+  chatId          String   @unique
+  title           String   @default("")
+  isActive        Boolean  @default(true)
+  pinnedMessageId Int?
+  lastTableDate   String?
+  createdAt       DateTime @default(now())
+
+  members     GroupMember[]
+  mealRecords MealRecord[]
+  mentions    Mention[]
+
+  @@index([isActive])
+}
+
+model Member {
+  id         String  @id @default(cuid())
+  telegramId String  @unique
+  name       String
+  nameLc     String  @default("") /// kichik harfda — SQLite case-insensitive qidiruv uchun
+  username   String?
+  role       String  @default("member") /// owner | coach | member
+  status     String  @default("active") /// active | paused | left
+  timezone   String  @default("Asia/Tashkent")
+  latitude   Float?
+  longitude  Float?
+  dmOpen     Boolean @default(false)
+  note       String  @default("")
+
+  joinedAt  DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  groups            GroupMember[]
+  mealRecords       MealRecord[]
+  mentions          Mention[]
+  reminderOverrides ReminderOverride[]
+  outbox            OutboundMessage[]
+
+  @@index([role])
+  @@index([status])
+}
+
+model GroupMember {
+  id       String   @id @default(cuid())
+  groupId  String
+  group    Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  memberId String
+  member   Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  joinedAt DateTime @default(now())
+
+  @@unique([groupId, memberId])
+  @@index([memberId])
+}
+
+model MealRecord {
+  id          String   @id @default(cuid())
+  memberId    String
+  member      Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  groupId     String?
+  group       Group?   @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  date        String /// a'zoning mahalliy sanasi yyyy-MM-dd
+  mealType    String /// nonushta | tushlik | kechki
+  timeSent    DateTime
+  status      String /// on_time | late
+  photoFileId String?
+  messageId   Int?
+  caption     String?
+
+  @@unique([memberId, date, mealType])
+  @@index([date])
+  @@index([groupId, date])
+}
+
+model Mention {
+  id        String   @id @default(cuid())
+  groupId   String
+  group     Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  memberId  String
+  member    Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  mealType  String
+  date      String
+  messageId Int
+  count     Int      @default(1)
+  updatedAt DateTime @updatedAt
+
+  @@unique([groupId, memberId, mealType, date])
+  @@index([date])
+}
+
+model ReminderOverride {
+  id        String   @id @default(cuid())
+  memberId  String
+  member    Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  mealType  String
+  muted     Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@unique([memberId, mealType])
+}
+
+/// Murabbiy botni o'z Telegram Business akkauntiga ulaganda saqlanadi.
+model BusinessConnection {
+  id           String   @id @default(cuid())
+  connectionId String   @unique
+  userTgId     String
+  userChatId   String
+  userName     String   @default("")
+  canReply     Boolean  @default(false)
+  isEnabled    Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([isEnabled])
+}
+
+/// Rejalashtirilgan / navbatdagi chiquvchi xabarlar.
+model OutboundMessage {
+  id            String    @id @default(cuid())
+  memberId      String?
+  member        Member?   @relation(fields: [memberId], references: [id], onDelete: SetNull)
+  chatId        String
+  text          String
+  channel       String    @default("business") /// business | bot
+  connectionId  String?
+  scheduledFor  DateTime  @default(now())
+  status        String    @default("pending") /// pending | sent | failed | cancelled
+  attempts      Int       @default(0)
+  error         String?
+  sentAt        DateTime?
+  createdByTgId String?
+  batchId       String?
+  createdAt     DateTime  @default(now())
+
+  @@index([status, scheduledFor])
+  @@index([batchId])
+}
+
+/// Bot ichidagi ko'p bosqichli dialoglar holati.
+model BotSession {
+  id        String   @id @default(cuid())
+  chatId    String   @unique
+  state     String   @default("idle")
+  payload   String   @default("{}")
+  updatedAt DateTime @updatedAt
+}
+
+/// AI suhbat xotirasi. AI hozircha o'chirilgan — jadval kelajak uchun turadi.
+model AiMessage {
+  id        String   @id @default(cuid())
+  chatKey   String
+  role      String
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([chatKey, createdAt])
+}

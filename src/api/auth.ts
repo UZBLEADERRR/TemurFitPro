@@ -1,10 +1,11 @@
 import crypto from 'crypto';
 import type { Request, Response, NextFunction } from 'express';
-import type { Tenant, Member } from '@prisma/client';
-import { prisma } from '../core/db';
+import type { Tenant } from '../generated/platform';
+import type { Member } from '../generated/tenant';
+import { prisma, tenantDb, type TenantClient } from '../core/db';
 import { decrypt } from '../core/crypto';
 import { isSuperAdmin } from '../core/tenants';
-import type { Role } from '../ai/tools';
+import { isCoachRole, type Role } from '../core/roles';
 
 // Mini App so'rovlarini Telegram initData orqali tekshiramiz.
 // Bu multi-tenant tizimda MUHIM: har bir tenantning o'z bot tokeni bilan
@@ -14,6 +15,8 @@ const MAX_AGE_SECONDS = 24 * 3600;
 
 export interface AuthedRequest extends Request {
     tenant: Tenant;
+    /// Shu botning O'Z ma'lumot fayli
+    db: TenantClient;
     member: Member | null;
     telegramId: string;
     role: Role;
@@ -93,19 +96,15 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
     }
 
     const telegramId = String(tgUser.id);
-    const member = await prisma.member.findUnique({
-        where: { tenantId_telegramId: { tenantId: tenant.id, telegramId } },
-    });
+    const db = await tenantDb(tenant.botId);
+    const member = await db.member.findUnique({ where: { telegramId } });
 
     const superAdmin = await isSuperAdmin(telegramId);
-    const role: Role = superAdmin
-        ? 'super'
-        : member && (member.role === 'coach' || member.role === 'owner')
-          ? 'coach'
-          : 'member';
+    const role: Role = superAdmin ? 'super' : member && isCoachRole(member.role) ? 'coach' : 'member';
 
     const authed = req as AuthedRequest;
     authed.tenant = tenant;
+    authed.db = db;
     authed.member = member;
     authed.telegramId = telegramId;
     authed.role = role;

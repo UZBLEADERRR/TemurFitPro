@@ -2,13 +2,14 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { env } from './core/env';
-import { prisma } from './core/db';
+import { prisma, disconnectAll } from './core/db';
 import { log } from './core/logger';
 import { api } from './api/routes';
 import { controlBot, seedSuperAdmins } from './bots/control';
 import { getEntry, loadAllTenants, webhookPath } from './core/registry';
 import { startScheduler } from './scheduler';
 import { tgError } from './core/telegram';
+import { DATA_DIR } from './core/paths';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -70,9 +71,9 @@ async function bootstrap(): Promise<void> {
 
     try {
         await prisma.$connect();
-        log.info('db', 'ulandi');
+        log.info('db', `platforma bazasi ulandi (${DATA_DIR})`);
     } catch (e) {
-        log.error('db', 'ulanmadi — qayta urinish uchun restart kerak', e);
+        log.error('db', 'baza ochilmadi — Railway Volume ulanganini tekshiring', e);
         process.exit(1);
     }
 
@@ -103,7 +104,7 @@ async function bootstrap(): Promise<void> {
 async function shutdown(signal: string): Promise<void> {
     log.info('server', `${signal} — yopilmoqda`);
     try {
-        await prisma.$disconnect();
+        await disconnectAll();
     } catch {
         /* ignore */
     }

@@ -5,6 +5,20 @@ import { haptic } from '../lib/telegram';
 
 type Tab = 'reyting' | 'yubormaganlar';
 
+/// Yubormaganlarni guruhlar bo'yicha ajratamiz — murabbiy qaysi guruhda
+/// muammo borligini bir qarashda ko'radi. Bir odam bir necha guruhda bo'lsa,
+/// har birida ko'rinadi.
+function groupInactive(rows: InactiveRow[]): [string, InactiveRow[]][] {
+    const map = new Map<string, InactiveRow[]>();
+    for (const r of rows) {
+        for (const g of r.groups.length ? r.groups : ['Guruhsiz']) {
+            if (!map.has(g)) map.set(g, []);
+            map.get(g)!.push(r);
+        }
+    }
+    return [...map.entries()].sort((a, b) => b[1].length - a[1].length);
+}
+
 export default function Ranking({ onPick }: { onPick: (id: string) => void }) {
     const [tab, setTab] = useState<Tab>('reyting');
     const [days, setDays] = useState(7);
@@ -104,24 +118,40 @@ export default function Ranking({ onPick }: { onPick: (id: string) => void }) {
                     {loading ? (
                         <Loading />
                     ) : !inactive || inactive.length === 0 ? (
-                        <Empty icon="✅" text={`Oxirgi ${gapDays} kunda hamma yuborgan`} />
+                        <Empty icon="✅" text={`Oxirgi ${gapDays} kunda barcha guruhlarda hamma yuborgan`} />
                     ) : (
-                        <Card tight>
-                            {inactive.map(r => (
-                                <button key={r.id} className="row" onClick={() => { haptic(); onPick(r.id); }}>
-                                    <Avatar name={r.name} />
-                                    <div className="grow">
-                                        <div className="name">{r.name}</div>
-                                        <div className="meta">
-                                            {r.lastMealDate ? `Oxirgi: ${r.lastMealDate}` : 'Hech qachon yubormagan'}
-                                        </div>
-                                    </div>
-                                    <span className="pill warn">
-                                        {r.daysSince === null ? '—' : `${r.daysSince} kun`}
-                                    </span>
-                                </button>
+                        <>
+                            <p style={{ color: 'var(--hint)', fontSize: 13, margin: '0 0 10px' }}>
+                                Barcha guruhlar bo'ylab — jami <b>{inactive.length}</b> kishi
+                            </p>
+                            {groupInactive(inactive).map(([groupName, rows]) => (
+                                <Card key={groupName} title={`${groupName} — ${rows.length}`} tight>
+                                    {rows.map(r => (
+                                        <button
+                                            key={r.id}
+                                            className="row"
+                                            onClick={() => {
+                                                haptic();
+                                                onPick(r.id);
+                                            }}
+                                        >
+                                            <Avatar name={r.name} />
+                                            <div className="grow">
+                                                <div className="name">{r.name}</div>
+                                                <div className="meta">
+                                                    {r.lastMealDate
+                                                        ? `Oxirgi: ${r.lastMealDate}`
+                                                        : 'Hech qachon yubormagan'}
+                                                </div>
+                                            </div>
+                                            <span className="pill warn">
+                                                {r.daysSince === null ? '—' : `${r.daysSince} kun`}
+                                            </span>
+                                        </button>
+                                    ))}
+                                </Card>
                             ))}
-                        </Card>
+                        </>
                     )}
                 </>
             )}

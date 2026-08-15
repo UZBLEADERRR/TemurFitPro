@@ -4,13 +4,13 @@ import { prisma } from '../core/db';
 import { authenticate, requireCoach, AuthedRequest } from './auth';
 import { MEAL_TYPES } from '../core/meals';
 import { todayIn, safeTz, lastNDates } from '../core/time';
-import { findInactive, getStats, listMembers, memberReport, listGroups } from '../features/filters';
+import { findInactive, getStats, listMembers, memberReport, listGroups, findMissingToday } from '../features/filters';
 import { activeConnection } from '../features/business';
 
 export const api = Router();
 
-const wrap = (fn: (req: AuthedRequest, res: Response) => Promise<unknown>) =>
-    async (req: Request, res: Response) => {
+const wrap =
+    (fn: (req: AuthedRequest, res: Response) => Promise<unknown>) => async (req: Request, res: Response) => {
         try {
             await fn(req as AuthedRequest, res);
         } catch (e) {
@@ -21,7 +21,6 @@ const wrap = (fn: (req: AuthedRequest, res: Response) => Promise<unknown>) =>
 
 api.use(authenticate);
 
-/// Kim men? — mini app birinchi navbatda shuni so'raydi
 api.get('/me', wrap(async (req, res) => {
     res.json({
         role: req.role,
@@ -31,7 +30,6 @@ api.get('/me', wrap(async (req, res) => {
             : null,
         tenant: {
             id: req.tenant.id,
-            agentName: req.tenant.agentName,
             botUsername: req.tenant.botUsername,
             timezone: req.tenant.timezone,
             meals: {
@@ -43,18 +41,15 @@ api.get('/me', wrap(async (req, res) => {
     });
 }));
 
-/// Kunlik jadval — sana bo'yicha barcha a'zolar va belgilari
+/// Kunlik jadval — sana bo'yicha. Guruh berilmasa BARCHA guruhlar.
 api.get('/board', wrap(async (req, res) => {
-    const tenant = req.tenant;
+    const { tenant, db } = req;
     const date = String(req.query.date || todayIn(safeTz(tenant.timezone)));
     const groupId = req.query.group ? String(req.query.group) : null;
-
-    // Oddiy a'zo faqat o'z natijasini ko'radi
     const scopeToSelf = req.role === 'member';
 
-    const members = await prisma.member.findMany({
+    const members = await db.member.findMany({
         where: {
-            tenantId: tenant.id,
             status: 'active',
             ...(scopeToSelf && req.member ? { id: req.member.id } : {}),
             ...(groupId ? { groups: { some: { groupId } } } : {}),
@@ -63,8 +58,8 @@ api.get('/board', wrap(async (req, res) => {
         orderBy: { joinedAt: 'asc' },
     });
 
-    const records = await prisma.mealRecord.findMany({
-        where: { tenantId: tenant.id, date, memberId: { in: members.map(m => m.id) } },
+    const records = await db.mealRecord.findMany({
+        where: { date, memberId: { in: members.map(m => m.id) } },
     });
 
     res.json({
@@ -86,43 +81,49 @@ api.get('/board', wrap(async (req, res) => {
 }));
 
 api.get('/groups', wrap(async (req, res) => {
-    const groups = await listGroups(req.tenant.id);
-    const withCounts = await Promise.all(
-        groups.map(async g => ({
-            id: g.id,
-            title: g.title || g.chatId,
-            members: await prisma.groupMember.count({ where: { groupId: g.id } }),
-        })),
+    const groups = await listGroups(req.db);
+    res.json(
+        await Promise.all(
+            groups.map(async g => ({
+                id: g.id,
+                title: g.title || g.chatId,
+                members: await req.db.groupMember.count({ where: { groupId: g.id } }),
+            })),
+        ),
     );
-    res.json(withCounts);
 }));
 
 api.get('/stats', requireCoach, wrap(async (req, res) => {
     const days = Math.min(90, Math.max(1, Number(req.query.days) || 7));
     const groupId = req.query.group ? String(req.query.group) : null;
-    res.json(await getStats(req.tenant, { days, groupId }));
+    res.json(await getStats(req.db, req.tenant, { days, groupId }));
 }));
 
+/// Yubormaganlar — standart holatda BARCHA guruhlar bo'ylab
 api.get('/inactive', requireCoach, wrap(async (req, res) => {
     const days = Math.min(60, Math.max(1, Number(req.query.days) || 2));
     const groupId = req.query.group ? String(req.query.group) : null;
-    res.json(await findInactive(req.tenant, { days, groupId }));
+    res.json(await findInactive(req.db, req.tenant, { days, groupId }));
+}));
+
+/// Bugun to'liq yubormaganlar — barcha guruhlar
+api.get('/missing-today', requireCoach, wrap(async (req, res) => {
+    const groupId = req.query.group ? String(req.query.group) : null;
+    res.json(await findMissingToday(req.db, { groupId }));
 }));
 
 api.get('/members', requireCoach, wrap(async (req, res) => {
     const groupId = req.query.group ? String(req.query.group) : null;
-    res.json(await listMembers(req.tenant.id, { groupId }));
+    res.json(await listMembers(req.db, { groupId }));
 }));
 
-/// Bitta a'zoning kunma-kun tarixi. A'zo faqat o'zinikini ko'ra oladi.
 api.get('/member/:id', wrap(async (req, res) => {
     const days = Math.min(60, Math.max(1, Number(req.query.days) || 14));
     const id = req.params.id === 'me' ? req.member?.id : req.params.id;
     if (!id) return res.status(404).json({ error: "A'zo topilmadi" });
-    if (req.role === 'member' && id !== req.member?.id) {
-        return res.status(403).json({ error: 'Ruxsat yoʻq' });
-    }
-    const rep = await memberReport(req.tenant, id, days);
+    if (req.role === 'member' && id !== req.member?.id) return res.status(403).json({ error: 'Ruxsat yoʻq' });
+
+    const rep = await memberReport(req.db, id, days);
     if (!rep) return res.status(404).json({ error: "A'zo topilmadi" });
     res.json({
         member: { id: rep.member.id, name: rep.member.name, timezone: rep.member.timezone, role: rep.member.role },
@@ -132,21 +133,18 @@ api.get('/member/:id', wrap(async (req, res) => {
     });
 }));
 
-/// Shaxsiy natija seriyasi (streak) — mini app bosh sahifasi uchun
 api.get('/streak', wrap(async (req, res) => {
     const memberId = req.query.member ? String(req.query.member) : req.member?.id;
     if (!memberId) return res.json({ streak: 0, days: [] });
-    if (req.role === 'member' && memberId !== req.member?.id) {
-        return res.status(403).json({ error: 'Ruxsat yoʻq' });
-    }
-    const member = await prisma.member.findFirst({ where: { id: memberId, tenantId: req.tenant.id } });
+    if (req.role === 'member' && memberId !== req.member?.id) return res.status(403).json({ error: 'Ruxsat yoʻq' });
+
+    const member = await req.db.member.findUnique({ where: { id: memberId } });
     if (!member) return res.status(404).json({ error: "A'zo topilmadi" });
 
-    const tz = safeTz(member.timezone);
-    const window = lastNDates(tz, 30);
-    const records = await prisma.mealRecord.findMany({
+    const window = lastNDates(safeTz(member.timezone), 30);
+    const records = await req.db.mealRecord.findMany({
         where: { memberId, date: { in: window } },
-        select: { date: true, mealType: true, status: true },
+        select: { date: true, status: true },
     });
 
     const days = window.map(date => {
@@ -167,8 +165,6 @@ api.get('/streak', wrap(async (req, res) => {
 api.get('/settings', requireCoach, wrap(async (req, res) => {
     const t = req.tenant;
     res.json({
-        agentName: t.agentName,
-        coachStyle: t.coachStyle,
         timezone: t.timezone,
         breakfastTime: t.breakfastTime,
         lunchTime: t.lunchTime,
@@ -190,14 +186,10 @@ api.post('/settings', requireCoach, wrap(async (req, res) => {
     const timeRe = /^([01]\d|2[0-3]):[0-5]\d$/;
     const data: Record<string, unknown> = {};
 
-    for (const [key, field] of [
-        ['breakfastTime', 'breakfastTime'],
-        ['lunchTime', 'lunchTime'],
-        ['dinnerTime', 'dinnerTime'],
-    ] as const) {
+    for (const key of ['breakfastTime', 'lunchTime', 'dinnerTime'] as const) {
         if (b[key] !== undefined) {
             if (!timeRe.test(String(b[key]))) return res.status(400).json({ error: `${key} formati notoʻgʻri` });
-            data[field] = String(b[key]);
+            data[key] = String(b[key]);
         }
     }
 
@@ -219,59 +211,38 @@ api.post('/settings', requireCoach, wrap(async (req, res) => {
 
     if (b.requirePhoto !== undefined) data.requirePhoto = !!b.requirePhoto;
     if (b.autoDeleteReminders !== undefined) data.autoDeleteReminders = !!b.autoDeleteReminders;
-    if (b.agentName) data.agentName = String(b.agentName).slice(0, 40);
-    if (b.coachStyle !== undefined) data.coachStyle = String(b.coachStyle).slice(0, 2000);
-    if (b.breakfastWords) data.breakfastWords = String(b.breakfastWords).slice(0, 500);
-    if (b.lunchWords) data.lunchWords = String(b.lunchWords).slice(0, 500);
-    if (b.dinnerWords) data.dinnerWords = String(b.dinnerWords).slice(0, 500);
+    for (const key of ['breakfastWords', 'lunchWords', 'dinnerWords'] as const) {
+        if (b[key]) data[key] = String(b[key]).slice(0, 500);
+    }
 
-    if (Object.keys(data).length === 0) return res.status(400).json({ error: "Oʻzgarish yoʻq" });
+    if (Object.keys(data).length === 0) return res.status(400).json({ error: 'Oʻzgarish yoʻq' });
 
-    const updated = await prisma.tenant.update({ where: { id: req.tenant.id }, data });
-    res.json({ ok: true, settings: { ...data, agentName: updated.agentName } });
+    await prisma.tenant.update({ where: { id: req.tenant.id }, data });
+    res.json({ ok: true, settings: data });
 }));
 
 api.post('/reminder-override', requireCoach, wrap(async (req, res) => {
     const { memberId, mealType, muted } = req.body ?? {};
-    if (!memberId || !mealType) return res.status(400).json({ error: "memberId va mealType kerak" });
-    const member = await prisma.member.findFirst({ where: { id: String(memberId), tenantId: req.tenant.id } });
+    if (!memberId || !mealType) return res.status(400).json({ error: 'memberId va mealType kerak' });
+    const member = await req.db.member.findUnique({ where: { id: String(memberId) } });
     if (!member) return res.status(404).json({ error: "A'zo topilmadi" });
 
     if (muted) {
-        await prisma.reminderOverride.upsert({
+        await req.db.reminderOverride.upsert({
             where: { memberId_mealType: { memberId: member.id, mealType: String(mealType) } },
-            create: { tenantId: req.tenant.id, memberId: member.id, mealType: String(mealType), muted: true },
+            create: { memberId: member.id, mealType: String(mealType), muted: true },
             update: { muted: true },
         });
     } else {
-        await prisma.reminderOverride.deleteMany({ where: { memberId: member.id, mealType: String(mealType) } });
+        await req.db.reminderOverride.deleteMany({ where: { memberId: member.id, mealType: String(mealType) } });
     }
     res.json({ ok: true });
 }));
 
 api.get('/business', requireCoach, wrap(async (req, res) => {
-    const conn = await activeConnection(req.tenant.id, req.telegramId);
+    const conn = await activeConnection(req.db, req.telegramId);
     res.json({
         ready: !!conn,
         connection: conn ? { user: conn.userName, canReply: conn.canReply, enabled: conn.isEnabled } : null,
     });
-}));
-
-api.get('/outbox', requireCoach, wrap(async (req, res) => {
-    const rows = await prisma.outboundMessage.findMany({
-        where: { tenantId: req.tenant.id, status: { in: ['pending', 'failed'] } },
-        orderBy: { scheduledFor: 'asc' },
-        take: 50,
-        include: { member: true },
-    });
-    res.json(
-        rows.map(r => ({
-            id: r.id,
-            to: r.member?.name ?? r.chatId,
-            text: r.text,
-            scheduledFor: r.scheduledFor,
-            status: r.status,
-            error: r.error,
-        })),
-    );
 }));

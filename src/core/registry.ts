@@ -1,6 +1,6 @@
 import { Telegraf } from 'telegraf';
-import type { Tenant } from '@prisma/client';
-import { prisma } from './db';
+import type { Tenant } from '../generated/platform';
+import { prisma, tenantDb } from './db';
 import { decrypt } from './crypto';
 import { env } from './env';
 import { log } from './logger';
@@ -50,6 +50,9 @@ export function webhookUrl(tenant: { botId: string; webhookSecret: string }): st
 /// Tenant botini xotiraga yuklash va Telegram'da webhook o'rnatish.
 export async function registerTenant(tenant: Tenant, setWebhook = true): Promise<void> {
     unregisterTenant(tenant.botId);
+
+    // Bot uchun alohida ma'lumot fayli tayyor turishi kerak
+    await tenantDb(tenant.botId);
 
     const token = decrypt(tenant.botTokenEnc);
     const bot = new Telegraf(token, { handlerTimeout: 90_000 });
