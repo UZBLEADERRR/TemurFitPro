@@ -1,0 +1,87 @@
+import { useEffect, useState } from 'react';
+import { api, tenantId, type Me } from './lib/api';
+import { haptic } from './lib/telegram';
+import Today from './components/Today';
+import Ranking from './components/Ranking';
+import Members from './components/Members';
+import SettingsScreen from './components/SettingsScreen';
+import MemberSheet from './components/MemberSheet';
+import { Empty, Loading } from './components/bits';
+
+type Tab = 'today' | 'rank' | 'members' | 'settings';
+
+const TABS: { key: Tab; icon: string; label: string; coachOnly?: boolean }[] = [
+    { key: 'today', icon: '🍽', label: 'Bugun' },
+    { key: 'rank', icon: '📊', label: 'Reyting', coachOnly: true },
+    { key: 'members', icon: '👥', label: "A'zolar", coachOnly: true },
+    { key: 'settings', icon: '⚙️', label: 'Sozlash', coachOnly: true },
+];
+
+export default function App() {
+    const [me, setMe] = useState<Me | null>(null);
+    const [error, setError] = useState('');
+    const [tab, setTab] = useState<Tab>('today');
+    const [picked, setPicked] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (!tenantId()) {
+            setError("Havola noto'g'ri — mini ilovani bot tugmasi orqali oching.");
+            return;
+        }
+        api.me()
+            .then(setMe)
+            .catch(e => setError(e.message));
+    }, []);
+
+    if (error) {
+        return (
+            <div className="app">
+                <div className="screen">
+                    <Empty icon="⚠️" text={error} />
+                </div>
+            </div>
+        );
+    }
+
+    if (!me) {
+        return (
+            <div className="app">
+                <div className="screen">
+                    <Loading rows={5} />
+                </div>
+            </div>
+        );
+    }
+
+    const isCoach = me.role === 'coach' || me.role === 'super';
+    const visible = TABS.filter(t => !t.coachOnly || isCoach);
+
+    return (
+        <div className="app">
+            {tab === 'today' && <Today me={me} onPick={setPicked} />}
+            {tab === 'rank' && isCoach && <Ranking onPick={setPicked} />}
+            {tab === 'members' && isCoach && <Members onPick={setPicked} />}
+            {tab === 'settings' && isCoach && <SettingsScreen agentName={me.tenant.agentName} />}
+
+            {picked && <MemberSheet id={picked} onClose={() => setPicked(null)} />}
+
+            {visible.length > 1 && (
+                <nav className="nav">
+                    {visible.map(t => (
+                        <button
+                            key={t.key}
+                            className={tab === t.key ? 'on' : ''}
+                            onClick={() => {
+                                haptic();
+                                setTab(t.key);
+                            }}
+                        >
+                            <span className="ic">{t.icon}</span>
+                            {t.label}
+                        </button>
+                    ))}
+                </nav>
+            )}
+        </div>
+    );
+}
