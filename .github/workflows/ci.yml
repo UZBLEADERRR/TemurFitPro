@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # Railway prod rejimida `npm ci` qiladi va devDependencies'ni o'tkazib
+      # yuboradi. Bu yerda esa tip tekshiruvi kerak, shuning uchun dev bilan.
+      - name: O'rnatish
+        run: npm ci --include=dev
+        env:
+          PLATFORM_DATABASE_URL: file:./ci-platform.db
+          TENANT_DATABASE_URL: file:./ci-tenant.db
+
+      - name: Tip tekshiruvi
+        run: npm run typecheck
+        env:
+          PLATFORM_DATABASE_URL: file:./ci-platform.db
+          TENANT_DATABASE_URL: file:./ci-tenant.db
+
+      - name: Mini ilovani yig'ish
+        run: npm run build
+        env:
+          PLATFORM_DATABASE_URL: file:./ci-platform.db
+          TENANT_DATABASE_URL: file:./ci-tenant.db
+
+      # Sxema o'zgarib, tenant-init.sql yangilanmay qolsa yangi botlar
+      # bo'sh baza bilan ochiladi — shuni oldini olamiz.
+      - name: tenant-init.sql sxemaga mos ekanini tekshirish
+        run: |
+          npm run sql:tenant
+          if ! git diff --quiet prisma/tenant-init.sql; then
+            echo "::error::prisma/tenant-init.sql eskirgan. `npm run sql:tenant` ni ishga tushirib, natijani commit qiling."
+            git diff prisma/tenant-init.sql
+            exit 1
+          fi
+        env:
+          PLATFORM_DATABASE_URL: file:./ci-platform.db
+          TENANT_DATABASE_URL: file:./ci-tenant.db

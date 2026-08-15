@@ -5,12 +5,12 @@
   "main": "src/index.ts",
   "type": "commonjs",
   "engines": {
-    "node": ">=20"
+    "node": "22.x"
   },
   "scripts": {
     "start": "node scripts/prestart.js && npx tsx src/index.ts",
     "dev": "node scripts/prestart.js && npx tsx watch src/index.ts",
-    "build": "npm run generate && npx tsc --noEmit && cd client && npm install && npm run build",
+    "build": "npm run generate && cd client && npm install --include=dev && npm run build",
     "typecheck": "npm run generate && npx tsc --noEmit",
     "generate": "npx prisma generate --schema prisma/platform.prisma && npx prisma generate --schema prisma/tenant.prisma",
     "sql:tenant": "npx prisma migrate diff --from-empty --to-schema-datamodel prisma/tenant.prisma --script > prisma/tenant-init.sql",
@@ -26,15 +26,15 @@
     "express": "^4.21.2",
     "geo-tz": "^8.1.6",
     "node-cron": "^4.2.1",
-    "telegraf": "^4.16.3"
+    "prisma": "^5.22.0",
+    "telegraf": "^4.16.3",
+    "tsx": "^4.21.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^4.17.21",
     "@types/node": "^22.10.0",
     "@types/node-cron": "^3.0.11",
-    "prisma": "^5.22.0",
-    "tsx": "^4.21.0",
     "typescript": "^5.7.2"
   }
 }
