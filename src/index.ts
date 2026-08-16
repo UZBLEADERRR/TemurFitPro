@@ -7,6 +7,7 @@ import { log } from './core/logger';
 import { api } from './api/routes';
 import { controlBot, seedSuperAdmins } from './bots/control';
 import { getEntry, loadAllTenants, webhookPath } from './core/registry';
+import { setWebhook, reconcile, CONTROL_UPDATES, type WebhookSpec } from './core/webhooks';
 import { startScheduler } from './scheduler';
 import { tgError } from './core/telegram';
 import { DATA_DIR } from './core/paths';
@@ -50,6 +51,22 @@ app.post('/tg/:botId/:secret', express.json(), async (req, res) => {
         .catch(e => log.error('webhook', `update xatosi (bot=${botId}): ${tgError(e)}`));
 });
 
+/// Ona bot webhookining tavsifi
+export function controlSpec(): WebhookSpec {
+    return {
+        label: 'ona bot',
+        url: `${env.PUBLIC_URL}${CONTROL_PATH}`,
+        secret: CONTROL_SECRET,
+        allowedUpdates: CONTROL_UPDATES,
+    };
+}
+
+/// Ona bot webhookini tekshirib, kerak bo'lsa tiklash (scheduler chaqiradi)
+export async function reconcileControlWebhook(): Promise<boolean> {
+    if (!env.PUBLIC_URL) return false;
+    return reconcile(controlBot, controlSpec());
+}
+
 // ====== API ======
 app.use('/api', api);
 
@@ -82,16 +99,12 @@ async function bootstrap(): Promise<void> {
     if (!env.PUBLIC_URL) {
         log.warn('server', "PUBLIC_URL sozlanmagan — webhooklar o'rnatilmaydi. Railway'da qo'shing.");
     } else {
-        try {
-            await controlBot.telegram.setWebhook(`${env.PUBLIC_URL}${CONTROL_PATH}`, {
-                secret_token: CONTROL_SECRET,
-                drop_pending_updates: true,
-                allowed_updates: ['message', 'callback_query', 'my_chat_member'],
-            });
-            log.info('control-bot', 'webhook o\'rnatildi');
-        } catch (e) {
-            log.error('control-bot', `webhook o'rnatilmadi: ${tgError(e)}`);
-        }
+        // Webhook o'rnatishni KUTMAYMIZ: Telegram sekin javob bersa (504 odatiy hol)
+        // butun startni 2 daqiqaga to'xtatib qo'yardi. Fonda qayta urinadi, va
+        // baribir yiqilsa scheduler har 10 daqiqada tiklashga harakat qiladi.
+        void setWebhook(controlBot, controlSpec()).then(ok => {
+            if (!ok) log.warn('control-bot', "webhook hozircha o'rnatilmadi — scheduler qayta urinadi");
+        });
     }
 
     await loadAllTenants();

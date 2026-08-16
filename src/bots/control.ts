@@ -11,7 +11,8 @@ import {
     createTenant, deleteTenant, pauseTenant, resumeTenant, purgeTenantData, purgeOlderThan,
     addGroup, isSuperAdmin, audit, TenantError, PurgeScope,
 } from '../core/tenants';
-import { getEntry, webhookUrl } from '../core/registry';
+import { getEntry, webhookUrl, tenantSpec, reconcileTenantWebhooks } from '../core/registry';
+import { getState } from '../core/webhooks';
 import { getControlState, setControlState, clearControlState } from './session';
 import { formatIn, safeTz, daysAgoIn } from '../core/time';
 import { getStats, formatStats, findInactive, formatInactive } from '../features/filters';
@@ -46,7 +47,10 @@ function mainMenu() {
         [Markup.button.callback("➕ Yangi bot qo'shish", 's:addbot')],
         [Markup.button.callback('🤖 Botlar', 's:bots'), Markup.button.callback('📊 Umumiy holat', 's:overview')],
         [Markup.button.callback('👑 Super adminlar', 's:admins')],
-        [Markup.button.callback('💾 Disk hisoboti', 's:disk')],
+        [
+            Markup.button.callback('💾 Disk', 's:disk'),
+            Markup.button.callback('🔌 Webhook', 's:hooks'),
+        ],
     ]);
 }
 
@@ -141,6 +145,20 @@ controlBot.on('callback_query', async ctx => {
 
             case 'disk':
                 return showDisk(ctx);
+
+            case 'hooks':
+                return showWebhooks(ctx);
+
+            case 'fixhooks': {
+                const { reconcileControlWebhook } = await import('../index');
+                const controlOk = await reconcileControlWebhook();
+                const res = await reconcileTenantWebhooks();
+                await reply(
+                    ctx,
+                    `🔄 Ona bot: ${controlOk ? '✅' : '❌'} · Mijoz botlari: ${res.fixed}/${res.checked} tiklandi`,
+                );
+                return showWebhooks(ctx);
+            }
 
             case 'admins':
                 return showAdmins(ctx);
@@ -559,6 +577,55 @@ async function showDisk(ctx: Context) {
         ].join('\n'),
         back('s:menu'),
     );
+}
+
+/// Webhook holati — Telegram botga xabar yubora olyaptimi yo'qmi, shu yerda ko'rinadi.
+/// Bot "jim" bo'lib qolsa birinchi navbatda shu yerga qaraladi.
+async function showWebhooks(ctx: Context) {
+    if (!env.PUBLIC_URL) {
+        return reply(
+            ctx,
+            "⚠️ <b>PUBLIC_URL sozlanmagan</b>\n\nWebhooklar o'rnatilmaydi va botlar hech qanday xabar olmaydi.\nRailway → Variables → PUBLIC_URL qo'shing.",
+            back('s:menu'),
+        );
+    }
+
+    const lines: string[] = ['🔌 <b>Webhook holati</b>', ''];
+
+    const { controlSpec } = await import('../index');
+    const spec = controlSpec();
+    const cState = await getState(controlBot, spec.url);
+    lines.push(`<b>Ona bot</b> — ${describe(cState)}`);
+
+    const tenants = await prisma.tenant.findMany({ where: { status: 'active' }, orderBy: { createdAt: 'asc' } });
+    for (const t of tenants) {
+        const entry = getEntry(t.botId);
+        if (!entry) {
+            lines.push(`<b>@${esc(t.botUsername)}</b> — 🔴 yuklanmagan`);
+            continue;
+        }
+        lines.push(`<b>@${esc(t.botUsername)}</b> — ${describe(await getState(entry.bot, tenantSpec(t).url))}`);
+    }
+
+    lines.push('', "<i>Har 10 daqiqada avtomatik tekshiriladi va tiklanadi.</i>");
+
+    return reply(
+        ctx,
+        lines.join('\n'),
+        Markup.inlineKeyboard([
+            [Markup.button.callback('🔄 Hozir tiklash', 's:fixhooks')],
+            [Markup.button.callback('⬅️ Menyu', 's:menu')],
+        ]),
+    );
+}
+
+function describe(state: Awaited<ReturnType<typeof getState>>): string {
+    if (!state) return "⚠️ holatni olib bo'lmadi";
+    if (!state.url) return "❌ o'rnatilmagan";
+    if (!state.ok) return `⚠️ boshqa manzil: <code>${esc(state.url)}</code>`;
+    const pending = state.pending > 0 ? ` · ${state.pending} kutayotgan` : '';
+    const err = state.lastError ? `\n   ↳ oxirgi xato: <i>${esc(state.lastError)}</i>` : '';
+    return `✅ ishlayapti${pending}${err}`;
 }
 
 async function showAdmins(ctx: Context) {

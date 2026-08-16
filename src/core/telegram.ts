@@ -9,18 +9,46 @@ export function tgErrorCode(e: any): number | undefined {
     return e?.response?.error_code;
 }
 
-/// 429 va 5xx — vaqtinchalik xatolar, exponential backoff bilan qayta urinamiz.
-/// 400/403 — doimiy, darhol uloqtiriladi.
-export async function withRetry<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
+/// Tarmoq uzilishlari va shlyuz xatolari — Telegram javobida error_code
+/// bo'lmasligi mumkin (masalan 504 HTML sahifa qaytarsa). Shuning uchun
+/// xato matnini ham tekshiramiz.
+const TRANSIENT_PATTERNS = [
+    'gateway time-out',
+    'gateway timeout',
+    'bad gateway',
+    'service unavailable',
+    'timeout',
+    'timedout',
+    'etimedout',
+    'econnreset',
+    'econnrefused',
+    'enotfound',
+    'eai_again',
+    'socket hang up',
+    'network',
+    'fetch failed',
+    // Shlyuz JSON o'rniga HTML xato sahifasini qaytarganda Telegraf shunday deydi
+    'invalid json response',
+];
+
+export function isTransient(e: any): boolean {
+    const code = tgErrorCode(e);
+    if (code === 429) return true;
+    if (typeof code === 'number' && code >= 500 && code < 600) return true;
+    const text = String(tgError(e)).toLowerCase();
+    return TRANSIENT_PATTERNS.some(p => text.includes(p));
+}
+
+/// Vaqtinchalik xatolarda exponential backoff bilan qayta urinamiz.
+/// Doimiy xatolar (400 "chat not found", 403 "bot was blocked") darhol uloqtiriladi.
+export async function withRetry<T>(fn: () => Promise<T>, retries = 3, baseDelayMs = 1000): Promise<T> {
     for (let attempt = 1; ; attempt++) {
         try {
             return await fn();
         } catch (e: any) {
-            const code = tgErrorCode(e);
-            const transient = code === 429 || (typeof code === 'number' && code >= 500 && code < 600);
-            if (!transient || attempt > retries) throw e;
+            if (!isTransient(e) || attempt > retries) throw e;
             const retryAfter = e?.response?.parameters?.retry_after;
-            const delay = retryAfter ? retryAfter * 1000 : 1000 * 2 ** (attempt - 1);
+            const delay = retryAfter ? retryAfter * 1000 : baseDelayMs * 2 ** (attempt - 1);
             await sleep(delay);
         }
     }
