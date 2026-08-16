@@ -8,7 +8,7 @@ import { prisma, tenantDb } from '../core/db';
 import { log } from '../core/logger';
 import { esc, chunkText, tgError } from '../core/telegram';
 import { safeTz } from '../core/time';
-import { MEAL_LABELS } from '../core/meals';
+import { MEAL_LABELS, MEAL_TYPES, isMealType, type MealType } from '../core/meals';
 import { isCoachRole } from '../core/roles';
 import { handleGroupMeal } from '../features/recording';
 import { renderTable, updateGroupTable } from '../features/table';
@@ -22,6 +22,9 @@ import { isSuperAdmin, registerIncomingGroup, markGroupLeft } from '../core/tena
 import { notifySuperAdmins } from '../features/notify';
 import { LIVE_GROUP, statusBadge } from '../core/groups';
 import { getTenantState, setTenantState, clearTenantState } from './session';
+import { ask, aiAvailable, aiOffReason, clearHistory } from '../ai/agent';
+import type { Role } from '../core/roles';
+import { downloadFile } from '../core/telegram';
 import { coachMenu, memberMenu, inactiveMenu, statsMenu, settingsMenu, backTo } from './ui';
 import crypto from 'crypto';
 
@@ -146,6 +149,14 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
         await reply(ctx, formatStats(await getStats(g.db, g.tenant, { days })), statsMenu(days));
     });
 
+    bot.command('tozalash', async ctx => {
+        if (ctx.chat.type !== 'private') return;
+        const t = await loadTenant();
+        if (!t) return;
+        const n = await clearHistory(t, String(ctx.from.id));
+        await ctx.reply(`🧹 AI suhbat tarixi tozalandi (${n} xabar).`);
+    });
+
     bot.command('bugun', async ctx => {
         const g = await requireCoach(ctx);
         if (!g) return;
@@ -207,6 +218,41 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
         );
     });
 
+    // ---------- Ovozli xabar: AI ----------
+    bot.on(['voice', 'audio'], async ctx => {
+        if (ctx.chat.type !== 'private') return;
+        const ctxData = await load();
+        if (!ctxData) return;
+        const { tenant, db } = ctxData;
+
+        const member = await db.member.findUnique({ where: { telegramId: String(ctx.from.id) } });
+        if (!member) return;
+
+        if (!aiAvailable(tenant)) {
+            await ctx.reply(aiOffReason(tenant));
+            return;
+        }
+
+        const file = (ctx.message as any).voice ?? (ctx.message as any).audio;
+        if (!file) return;
+
+        await ctx.sendChatAction('typing').catch(() => undefined);
+        try {
+            const buffer = await downloadFile(bot, file.file_id);
+            const res = await ask({
+                tenant,
+                actorTgId: String(ctx.from.id),
+                actorName: member.name,
+                role: await roleOf(member, String(ctx.from.id)),
+                audio: { buffer, mimeType: file.mime_type || 'audio/ogg' },
+            });
+            await reply(ctx, (res.transcript ? `🎙 <i>${esc(res.transcript)}</i>\n\n` : '') + res.reply);
+        } catch (e) {
+            log.error('tenant-bot', 'ovozli xabar xatosi', e);
+            await ctx.reply("🎙 Ovozli xabarni qayta ishlab bo'lmadi.");
+        }
+    });
+
     // ---------- Matnli xabarlar ----------
     bot.on('text', async ctx => {
         const ctxData = await load();
@@ -233,7 +279,21 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
             return;
         }
 
-        await showMenu(ctx, tenant, db, member, false);
+        // Erkin matn — AI ga. AI yo'q bo'lsa menyuni ko'rsatamiz.
+        if (!aiAvailable(tenant)) {
+            await showMenu(ctx, tenant, db, member, false);
+            return;
+        }
+
+        await ctx.sendChatAction('typing').catch(() => undefined);
+        const res = await ask({
+            tenant,
+            actorTgId: String(ctx.from.id),
+            actorName: member.name,
+            role: await roleOf(member, String(ctx.from.id)),
+            text,
+        });
+        await reply(ctx, res.reply);
     });
 
     // ---------- Lokatsiya: vaqt mintaqasini aniqlash ----------
@@ -258,6 +318,11 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
 
     // ================= YORDAMCHILAR =================
 
+    async function roleOf(member: Member, telegramId: string): Promise<Role> {
+        if (await isSuperAdmin(telegramId)) return 'super';
+        return isCoachRole(member.role) ? 'coach' : 'member';
+    }
+
     async function requireCoach(ctx: Context): Promise<{ tenant: Tenant; db: TenantClient } | null> {
         if (ctx.chat?.type !== 'private') return null;
         const ctxData = await load();
@@ -280,7 +345,7 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
             const head = greet
                 ? `👋 Salom, <b>${esc(member.name)}</b>!\n\n🏠 ${groups} guruh · 👥 ${people} a'zo`
                 : `🏋️ <b>Boshqaruv paneli</b>\n\n🏠 ${groups} guruh · 👥 ${people} a'zo`;
-            await reply(ctx, head, coachMenu(tenant.id));
+            await reply(ctx, head, coachMenu(tenant.id, aiAvailable(tenant) ? tenant.agentName : undefined));
             return;
         }
 
@@ -365,12 +430,54 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
 
             case 'members': {
                 const rows = await listMembers(db);
-                const lines = rows.slice(0, 80).map((r, i) => {
-                    const badge = r.role === 'owner' ? ' 👑' : r.role === 'coach' ? ' 🎯' : '';
-                    const grp = r.groups.length ? ` <i>${esc(r.groups.join(', '))}</i>` : '';
-                    return `${i + 1}. ${esc(r.name)}${badge}${grp}`;
+                if (rows.length === 0) {
+                    await reply(ctx, "👥 Hali a'zo yo'q.", backTo('c:menu'));
+                    return;
+                }
+                // Ismga bosilsa — o'sha a'zoning kartasi (eslatmalarni boshqarish uchun)
+                const buttons = rows.slice(0, 60).map(r => {
+                    const badge = r.role === 'owner' ? '👑' : r.role === 'coach' ? '🎯' : '👤';
+                    return [Markup.button.callback(`${badge} ${r.name.slice(0, 30)}`, `c:m:${r.id}`)];
                 });
-                await reply(ctx, [`👥 <b>A'zolar: ${rows.length}</b>`, '', ...lines].join('\n'), backTo('c:menu'));
+                buttons.push([Markup.button.callback('⬅️ Menyu', 'c:menu')]);
+                await reply(
+                    ctx,
+                    [
+                        `👥 <b>A'zolar: ${rows.length}</b>`,
+                        '',
+                        '<i>Ismga bosing — eslatmalarini boshqarasiz.</i>',
+                    ].join('\n'),
+                    Markup.inlineKeyboard(buttons),
+                );
+                return;
+            }
+
+            // A'zo kartasi: natija + eslatma tugmalari
+            case 'm': {
+                await showMemberCard(ctx, db, tenant, arg!);
+                return;
+            }
+
+            // Eslatmani yoqish/o'chirish: c:mr:<memberId>:<meal>
+            case 'mr': {
+                const memberId = arg!;
+                const meal = extra as MealType;
+                if (!isMealType(meal)) return;
+
+                const existing = await db.reminderOverride.findUnique({
+                    where: { memberId_mealType: { memberId, mealType: meal } },
+                });
+
+                if (existing?.muted) {
+                    await db.reminderOverride.deleteMany({ where: { memberId, mealType: meal } });
+                } else {
+                    await db.reminderOverride.upsert({
+                        where: { memberId_mealType: { memberId, mealType: meal } },
+                        create: { memberId, mealType: meal, muted: true },
+                        update: { muted: true },
+                    });
+                }
+                await showMemberCard(ctx, db, tenant, memberId);
                 return;
             }
 
@@ -445,8 +552,26 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
                 return;
             }
 
+            case 'ai':
+                await reply(
+                    ctx,
+                    [
+                        `🤖 <b>${esc(tenant.agentName)} bilan suhbat</b>`,
+                        '',
+                        'Shunchaki yozing yoki ovozli xabar yuboring. Masalan:',
+                        '• <i>"oxirgi 3 kunda kechki ovqat yubormaganlarni top"</i>',
+                        '• <i>"ularga ertaga soat 9 da ogohlantirish yubor"</i>',
+                        '• <i>"Dilnozaning nonushta eslatmasini o\'chir"</i>',
+                        '• <i>"nonushta vaqtini 07:30 ga o\'zgartir"</i>',
+                        '',
+                        'Suhbat tarixini tozalash: /tozalash',
+                    ].join('\n'),
+                    backTo('c:menu'),
+                );
+                return;
+
             case 'settings':
-                await reply(ctx, settingsText(tenant), settingsMenu(tenant));
+                await reply(ctx, settingsText(tenant, aiAvailable(tenant)), settingsMenu(tenant, aiAvailable(tenant)));
                 return;
 
             case 'business':
@@ -494,7 +619,7 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
                         where: { id: tenantId },
                         data: { requirePhoto: !tenant.requirePhoto },
                     });
-                    await reply(ctx, settingsText(updated), settingsMenu(updated));
+                    await reply(ctx, settingsText(updated, aiAvailable(updated)), settingsMenu(updated, aiAvailable(updated)));
                 }
                 return;
         }
@@ -590,6 +715,10 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
                 return;
             }
             data[field] = text;
+        } else if (field === 'agentName') {
+            data.agentName = text.slice(0, 40);
+        } else if (field === 'coachStyle') {
+            data.coachStyle = text.slice(0, 2000);
         } else if (field === 'reminderInterval' || field === 'maxReminders') {
             const n = Number(text);
             const [min, max] = field === 'reminderInterval' ? [5, 1440] : [0, 20];
@@ -605,7 +734,7 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
 
         const updated = await prisma.tenant.update({ where: { id: tenantId }, data });
         await clearTenantState(tenant.botId, chatId);
-        await reply(ctx, '✅ Saqlandi.\n\n' + settingsText(updated), settingsMenu(updated));
+        await reply(ctx, '✅ Saqlandi.\n\n' + settingsText(updated, aiAvailable(updated)), settingsMenu(updated, aiAvailable(updated)));
     }
 
     /// Barcha guruhlarning bugungi holati — bitta ekranda
@@ -619,6 +748,60 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
         parts.push(formatMissingToday(await findMissingToday(db, {})));
         return parts.join('\n\n──────────\n\n');
     }
+}
+
+/// A'zo kartasi — 7 kunlik natija va har bir ovqat uchun eslatma tugmasi.
+/// Murabbiy shu yerdan istagan a'zoning istagan ovqati bo'yicha eslatmani
+/// o'chirib qo'ya oladi (masalan odam nonushta qilmaydigan bo'lsa).
+async function showMemberCard(ctx: Context, db: TenantClient, tenant: Tenant, memberId: string) {
+    const member = await db.member.findUnique({ where: { id: memberId } });
+    if (!member) return;
+
+    const rep = await memberReport(db, memberId, 7);
+    const overrides = await db.reminderOverride.findMany({ where: { memberId, muted: true } });
+    const mutedSet = new Set(overrides.map(o => o.mealType));
+
+    const lines = [
+        `👤 <b>${esc(member.name)}</b>`,
+        member.username ? `@${esc(member.username)}` : '',
+        `🌍 ${member.timezone}`,
+        '',
+    ].filter(Boolean);
+
+    if (rep) {
+        const pct = Math.round((rep.total / rep.expected) * 100);
+        const grid = rep.byDate
+            .map(d => d.meals.map(m => (m.status === 'missing' ? '⚪️' : m.status === 'late' ? '🟡' : '🟢')).join(''))
+            .join(' ');
+        lines.push(`📊 7 kun: <b>${rep.total}/${rep.expected}</b> (${pct}%)`, `<code>${grid}</code>`, '');
+    }
+
+    lines.push(
+        mutedSet.size
+            ? `🔕 O'chirilgan: <b>${[...mutedSet].map(m => MEAL_LABELS[m as MealType] ?? m).join(', ')}</b>`
+            : '🔔 Barcha eslatmalar yoqilgan',
+        '',
+        '<i>Tugmani bosib eslatmani o\'chirasiz yoki yoqasiz.</i>',
+    );
+
+    const toggles = MEAL_TYPES.map(meal => {
+        const muted = mutedSet.has(meal);
+        return Markup.button.callback(
+            `${muted ? '🔕' : '🔔'} ${MEAL_LABELS[meal]}`,
+            `c:mr:${memberId}:${meal}`,
+        );
+    });
+
+    await reply(
+        ctx,
+        lines.join('\n'),
+        Markup.inlineKeyboard([
+            [toggles[0]],
+            [toggles[1]],
+            [toggles[2]],
+            [Markup.button.callback("⬅️ A'zolar", 'c:members')],
+        ]),
+    );
 }
 
 /// Guruhga yuboriladigan tanishtiruv matni
@@ -692,7 +875,7 @@ async function reply(ctx: Context, text: string, keyboard?: any): Promise<void> 
     }
 }
 
-function settingsText(t: Tenant): string {
+function settingsText(t: Tenant, aiOn = false): string {
     return [
         '⚙️ <b>Sozlamalar</b>',
         '',
@@ -703,6 +886,15 @@ function settingsText(t: Tenant): string {
         `🕐 Kechikish chegarasi: <b>${t.graceMinutes} daqiqa</b>`,
         `📷 Rasm majburiy: <b>${t.requirePhoto ? 'ha' : "yo'q"}</b>`,
         `🌍 Vaqt mintaqasi: <b>${t.timezone}</b>`,
+        ...(aiOn
+            ? [
+                  '',
+                  `🤖 AI ismi: <b>${esc(t.agentName)}</b>`,
+                  t.coachStyle
+                      ? `✍️ Yozish uslubi:\n<i>${esc(t.coachStyle.slice(0, 250))}</i>`
+                      : "✍️ Yozish uslubi kiritilmagan",
+              ]
+            : []),
     ].join('\n');
 }
 
@@ -713,6 +905,12 @@ function settingPrompt(field: string): string {
         dinnerTime: '🌙 Kechki ovqat vaqtini kiriting (<code>HH:mm</code>):',
         reminderInterval: '⏱ Eslatmalar orasidagi daqiqani kiriting (5-1440):',
         maxReminders: '🔁 Bir ovqat uchun maksimal eslatma sonini kiriting (0-20):',
+        agentName: '🤖 AI yordamchining yangi ismini kiriting:',
+        coachStyle:
+            '✍️ <b>Yozish uslubingizni tasvirlab bering.</b>\n\n' +
+            "AI a'zolarga yozadigan xabarlarni aynan shu uslubda tayyorlaydi.\n\n" +
+            '<i>Masalan: "Qisqa yozaman, hurmat bilan lekin qat\'iy. Doim ismini aytaman va ' +
+            'oxirida bitta motivatsion jumla qo\'shaman. Emoji kam ishlataman."</i>',
     };
     return prompts[field] ?? 'Qiymatni kiriting:';
 }

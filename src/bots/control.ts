@@ -15,6 +15,8 @@ import {
 import { LIVE_GROUP, statusBadge } from '../core/groups';
 import { getEntry, webhookUrl, tenantSpec, reconcileTenantWebhooks } from '../core/registry';
 import { getState } from '../core/webhooks';
+import { ask, aiAvailable, aiOffReason } from '../ai/agent';
+import { downloadFile } from '../core/telegram';
 import { getControlState, setControlState, clearControlState } from './session';
 import { formatIn, safeTz, daysAgoIn } from '../core/time';
 import { getStats, formatStats, findInactive, formatInactive } from '../features/filters';
@@ -56,6 +58,9 @@ function mainMenu(pending = 0) {
             Markup.button.callback('💾 Disk', 's:disk'),
             Markup.button.callback('🔌 Webhook', 's:hooks'),
         ],
+        ...(env.AI_ENABLED && env.GEMINI_API_KEY
+            ? [[Markup.button.callback('🧠 AI bilan boshqarish', 's:ai')]]
+            : []),
     ]);
 }
 
@@ -156,6 +161,37 @@ controlBot.on('callback_query', async ctx => {
 
             case 'pending':
                 return showPending(ctx);
+
+            case 'ai': {
+                const tenants = await prisma.tenant.findMany({ where: { status: 'active' }, orderBy: { createdAt: 'asc' } });
+                if (!tenants.length) return reply(ctx, "Avval bot qo'shing.", back('s:menu'));
+                const rows = tenants.map(t => [Markup.button.callback(`@${t.botUsername}`, `s:aisel:${t.id}`)]);
+                rows.push([Markup.button.callback('⬅️ Menyu', 's:menu')]);
+                return reply(
+                    ctx,
+                    "🧠 <b>Qaysi botni boshqaramiz?</b>\n\nTanlang, keyin oddiy tilda buyruq bering yoki ovozli xabar yuboring.",
+                    Markup.inlineKeyboard(rows),
+                );
+            }
+
+            case 'aisel': {
+                await setControlState(String(ctx.chat!.id), 'ai', { tenantId: id });
+                const t = await prisma.tenant.findUnique({ where: { id } });
+                return reply(
+                    ctx,
+                    [
+                        `🧠 <b>AI rejimi: @${esc(t?.botUsername ?? '')}</b>`,
+                        '',
+                        'Endi yozgan yoki aytgan gapingiz AI ga boradi. Masalan:',
+                        '• <i>"3 kunda ovqat yubormaganlarni top va ogohlantirish yubor"</i>',
+                        '• <i>"tasdiq kutayotgan guruhlar bormi"</i>',
+                        '• <i>"Bekning kechki eslatmasini o\'chir"</i>',
+                        '',
+                        'Chiqish uchun /menu bosing.',
+                    ].join('\n'),
+                    back('s:menu', '⬅️ Chiqish'),
+                );
+            }
 
             case 'gok': {
                 const t = await prisma.tenant.findUnique({ where: { id: id } });
@@ -348,6 +384,35 @@ controlBot.on('callback_query', async ctx => {
     }
 });
 
+// ---------- Ovozli buyruq ----------
+controlBot.on(['voice', 'audio'], async ctx => {
+    const session = await getControlState(String(ctx.chat.id));
+    if (session.state !== 'ai') {
+        return reply(ctx, "🎙 Ovozli buyruq uchun avval <b>🧠 AI bilan boshqarish</b> dan botni tanlang.", await mainMenuWithPending());
+    }
+    const tenant = await prisma.tenant.findUnique({ where: { id: String(session.payload.tenantId) } });
+    if (!tenant) return showMain(ctx);
+    if (!aiAvailable(tenant)) return reply(ctx, aiOffReason(tenant));
+
+    const file = (ctx.message as any).voice ?? (ctx.message as any).audio;
+    if (!file) return;
+    await ctx.sendChatAction('typing').catch(() => undefined);
+    try {
+        const buffer = await downloadFile(controlBot, file.file_id);
+        const res = await ask({
+            tenant,
+            actorTgId: String(ctx.from.id),
+            actorName: ctx.from.first_name || 'Admin',
+            role: 'super',
+            audio: { buffer, mimeType: file.mime_type || 'audio/ogg' },
+        });
+        await reply(ctx, (res.transcript ? `🎙 <i>${esc(res.transcript)}</i>\n\n` : '') + res.reply);
+    } catch (e) {
+        log.error('control-bot', 'ovoz xatosi', e);
+        await reply(ctx, "🎙 Ovozni qayta ishlab bo'lmadi.");
+    }
+});
+
 // ---------- Matn ----------
 controlBot.on('text', async ctx => {
     const text = ctx.message.text.trim();
@@ -406,6 +471,21 @@ controlBot.on('text', async ctx => {
             await audit(tenantId, String(ctx.from.id), 'coach.add', member.name);
             await reply(ctx, `🎯 <b>${esc(member.name)}</b> murabbiy qilib tayinlandi.`);
             return showCoaches(ctx, tenantId);
+        }
+
+        case 'ai': {
+            const tenant = await prisma.tenant.findUnique({ where: { id: String(session.payload.tenantId) } });
+            if (!tenant) return showMain(ctx);
+            if (!aiAvailable(tenant)) return reply(ctx, aiOffReason(tenant), await mainMenuWithPending());
+            await ctx.sendChatAction('typing').catch(() => undefined);
+            const res = await ask({
+                tenant,
+                actorTgId: String(ctx.from.id),
+                actorName: ctx.from.first_name || 'Admin',
+                role: 'super',
+                text,
+            });
+            return reply(ctx, res.reply);
         }
 
         default:
@@ -599,7 +679,7 @@ async function showOverview(ctx: Context) {
             '',
             `💾 Baza: <b>fayl</b> (${esc(DATA_DIR)})`,
             `🌐 PUBLIC_URL: ${env.PUBLIC_URL ? '✅' : '❌ sozlanmagan'}`,
-            `🧠 AI: ${env.AI_ENABLED ? '✅ yoqilgan' : "⏸ o'chirilgan"}`,
+            `🧠 AI: ${!env.AI_ENABLED ? "⏸ o'chirilgan" : env.GEMINI_API_KEY ? `✅ ${env.GEMINI_MODEL}` : '❌ GEMINI_API_KEY yo\'q'}`,
         ].join('\n'),
         back('s:menu'),
     );

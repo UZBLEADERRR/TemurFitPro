@@ -81,7 +81,7 @@ export default function App() {
             )}
             {tab === 'settings' && isCoach && <SettingsScreen />}
 
-            {picked && <MemberSheet id={picked} onClose={() => setPicked(null)} />}
+            {picked && <MemberSheet id={picked} canEdit={isCoach} onClose={() => setPicked(null)} />}
 
             {visible.length > 1 && (
                 <nav className="nav">
