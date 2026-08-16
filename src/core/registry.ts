@@ -5,6 +5,7 @@ import { decrypt } from './crypto';
 import { env } from './env';
 import { log } from './logger';
 import { tgError } from './telegram';
+import { setWebhook, reconcile, getState, TENANT_UPDATES, type WebhookSpec } from './webhooks';
 import { buildTenantBot } from '../bots/tenant';
 
 /// Ishga tushirilgan tenant botlar reyestri: botId -> instance.
@@ -48,7 +49,7 @@ export function webhookUrl(tenant: { botId: string; webhookSecret: string }): st
 }
 
 /// Tenant botini xotiraga yuklash va Telegram'da webhook o'rnatish.
-export async function registerTenant(tenant: Tenant, setWebhook = true): Promise<void> {
+export async function registerTenant(tenant: Tenant, withWebhook = true): Promise<void> {
     unregisterTenant(tenant.botId);
 
     // Bot uchun alohida ma'lumot fayli tayyor turishi kerak
@@ -70,23 +71,38 @@ export async function registerTenant(tenant: Tenant, setWebhook = true): Promise
         bot,
     });
 
-    if (setWebhook && env.PUBLIC_URL) {
-        try {
-            await bot.telegram.setWebhook(webhookUrl(tenant), {
-                secret_token: tenant.webhookSecret,
-                drop_pending_updates: false,
-                // Business update turlari Telegraf 4.16 tiplarida yo'q — xom ro'yxat
-                allowed_updates: [
-                    'message', 'edited_message', 'callback_query', 'my_chat_member',
-                    'chat_member', 'business_connection', 'business_message',
-                    'edited_business_message', 'deleted_business_messages',
-                ] as any,
-            });
-            log.info('registry', `webhook o'rnatildi: @${tenant.botUsername} (${tenant.botId})`);
-        } catch (e) {
-            log.error('registry', `webhook o'rnatishda xato @${tenant.botUsername}: ${tgError(e)}`);
-        }
+    if (withWebhook && env.PUBLIC_URL) {
+        await setWebhook(bot, tenantSpec(tenant));
     }
+}
+
+/// Tenant boti uchun webhook tavsifi
+export function tenantSpec(tenant: { botId: string; botUsername: string; webhookSecret: string }): WebhookSpec {
+    return {
+        label: `@${tenant.botUsername}`,
+        url: webhookUrl(tenant),
+        secret: tenant.webhookSecret,
+        allowedUpdates: TENANT_UPDATES,
+    };
+}
+
+/// Barcha tenant botlarining webhookini tekshirib, kerak bo'lsa tiklaydi.
+/// Telegram bir marta javob bermay qolsa, bot butunlay kar bo'lib qolmasin.
+export async function reconcileTenantWebhooks(): Promise<{ checked: number; fixed: number }> {
+    if (!env.PUBLIC_URL) return { checked: 0, fixed: 0 };
+    let checked = 0;
+    let fixed = 0;
+
+    for (const entry of registry.values()) {
+        const tenant = await prisma.tenant.findUnique({ where: { id: entry.tenantId } });
+        if (!tenant || tenant.status !== 'active') continue;
+        checked++;
+        const spec = tenantSpec(tenant);
+        if ((await getState(entry.bot, spec.url))?.ok) continue;
+        if (await reconcile(entry.bot, spec)) fixed++;
+    }
+
+    return { checked, fixed };
 }
 
 export function unregisterTenant(botId: string): void {

@@ -11,6 +11,7 @@ import { MEAL_TYPES, MEAL_LABELS, MealType, mealTargetMinutes, mealWindowEnd } f
 import { todayIn, localMinutes, safeTz } from './core/time';
 import { updateGroupTable, createAndPinTable } from './features/table';
 import { processOutbox } from './features/outbox';
+import { reconcileTenantWebhooks } from './core/registry';
 
 let ticking = false;
 
@@ -39,6 +40,21 @@ export function startScheduler(): void {
             await runDailyTables();
         } catch (e) {
             log.error('scheduler', 'kunlik jadval xatosi', e);
+        }
+    });
+
+    // ===== Har 10 daqiqada: webhooklarni tekshirish =====
+    // Telegram bir marta javob bermay qolsa (504), bot butunlay kar bo'lib
+    // qolmasin — holatni tekshirib, mos kelmasa qayta o'rnatamiz.
+    cron.schedule('*/10 * * * *', async () => {
+        try {
+            // Ona bot: aylanma importni oldini olish uchun kechiktirilgan yuklash
+            const { reconcileControlWebhook } = await import('./index');
+            await reconcileControlWebhook();
+            const res = await reconcileTenantWebhooks();
+            if (res.fixed > 0) log.info('scheduler', `webhook tiklandi: ${res.fixed}/${res.checked}`);
+        } catch (e) {
+            log.error('scheduler', 'webhook tekshiruvi xatosi', e);
         }
     });
 
