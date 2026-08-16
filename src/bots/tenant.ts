@@ -17,7 +17,8 @@ import {
     findMissingToday, formatMissingToday, listMembers, memberReport, listGroups,
 } from '../features/filters';
 import { saveBusinessConnection, connectionSummary } from '../features/business';
-import { enqueue } from '../features/outbox';
+import { recordSend, pendingSummary, failedSummary } from '../features/outbox';
+import { deliverToMember, describeAttempts, CHANNEL_LABEL } from '../features/delivery';
 import { isSuperAdmin, registerIncomingGroup, markGroupLeft } from '../core/tenants';
 import { notifySuperAdmins } from '../features/notify';
 import { LIVE_GROUP, statusBadge } from '../core/groups';
@@ -578,6 +579,16 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
                 await reply(ctx, await connectionSummary(db), backTo('c:menu'));
                 return;
 
+            case 'outbox': {
+                const parts = [
+                    await pendingSummary(db, tenant),
+                    '',
+                    await failedSummary(db, tenant),
+                ].join('\n');
+                await reply(ctx, parts, backTo('c:menu'));
+                return;
+            }
+
             case 'warn': {
                 const st = await getTenantState(tenant.botId, chatId);
                 const days = Number(st.payload.days) || 2;
@@ -690,21 +701,46 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
             }
             const members = await db.member.findMany({ where: { id: { in: memberIds } } });
             const batchId = crypto.randomUUID();
+            const coachTgId = String(ctx.from!.id);
+
+            await reply(ctx, `⏳ ${members.length} ta xabar yuborilmoqda...`);
+
+            const okLines: string[] = [];
+            const badLines: string[] = [];
+
             for (const m of members) {
-                await enqueue(db, {
+                const body = text.replace(/\{name\}/g, esc(m.name));
+                const res = await deliverToMember(
+                    db,
+                    tenant,
+                    { id: m.id, telegramId: m.telegramId, name: m.name },
+                    body,
+                    { preferred: 'business', coachTgId },
+                );
+                await recordSend(db, {
                     memberId: m.id,
                     chatId: m.telegramId,
-                    text: text.replace(/\{name\}/g, esc(m.name)),
+                    text: body,
                     channel: 'business',
-                    createdByTgId: String(ctx.from!.id),
+                    createdByTgId: coachTgId,
                     batchId,
+                    ok: res.ok,
+                    via: res.via,
+                    error: res.error ?? describeAttempts(res.attempts),
                 });
+                if (res.ok) okLines.push(`• ${esc(m.name)} — <i>${CHANNEL_LABEL[res.via!]}</i>`);
+                else badLines.push(`• <b>${esc(m.name)}</b>\n  <i>${esc(res.error ?? 'Yetib bormadi')}</i>`);
             }
-            await reply(
-                ctx,
-                `✅ ${members.length} ta xabar navbatga qo'yildi — bir daqiqa ichida sizning nomingizdan yuboriladi.`,
-                backTo('c:menu'),
-            );
+
+            const out: string[] = [];
+            if (okLines.length) out.push(`✅ <b>Yetib bordi — ${okLines.length}</b>`, ...okLines);
+            if (badLines.length) {
+                if (out.length) out.push('');
+                out.push(`❌ <b>Yetib bormadi — ${badLines.length}</b>`, ...badLines);
+            }
+
+            for (const part of chunkText(out.join('\n'))) await reply(ctx, part);
+            await reply(ctx, '📋 <b>Menyu</b>', backTo('c:menu'));
             return;
         }
 

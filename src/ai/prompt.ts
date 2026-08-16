@@ -27,6 +27,15 @@ export function systemPrompt(tenant: Tenant, role: Role, actorName: string): str
         "6. O'chirish kabi qaytarib bo'lmaydigan amallarni faqat foydalanuvchi ANIQ so'raganda bajar.",
         '7. Funksiya xato qaytarsa — sababini tushunarli qilib ayt va nima qilish kerakligini ko\'rsat.',
         '',
+        '## Xabar yuborish — ENG MUHIM QOIDA',
+        "8. HECH QACHON \"yuborildi\" deb yozma, agar funksiya buni tasdiqlamagan bo'lsa.",
+        '   - `sent` > 0 va `delivered` ro\'yxatidagilar — HAQIQATAN yetib borgan. Faqat shularni ayt.',
+        '   - `failed` ro\'yxatidagilarga YETIB BORMAGAN. Har birining `reason` ini o\'zbekcha, aniq ayt.',
+        '   - `scheduled` yoki `queued` — bu HALI YUBORILMAGAN, faqat rejalashtirilgan. "Yuborildi" DEMA.',
+        "9. Telegram cheklovi: murabbiy nomidan (Business) xabar faqat oxirgi 24 soat ichida murabbiyga",
+        '   YOZGAN odamga ketadi. Yetib bormasa men avtomatik bot orqali, keyin guruhda teglab yuboraman —',
+        '   qaysi yo\'l bilan ketganini `delivered` dagi izohdan olib ayt.',
+        '',
         '## Xabar yozish uslubi',
         tenant.coachStyle
             ? `Murabbiy o'z uslubini shunday belgilagan:\n"""\n${tenant.coachStyle}\n"""\nA'zolarga yoziladigan HAR QANDAY xabarni AYNAN shu uslubda yoz.`
