@@ -18,6 +18,7 @@ export function coachMenu(tenantId: string, agentName?: string) {
             Markup.button.callback('⚙️ Sozlamalar', 'c:settings'),
             Markup.button.callback('🔌 Business', 'c:business'),
         ],
+        [Markup.button.callback('📮 Xabarlar holati', 'c:outbox')],
     ];
     if (agentName) rows.push([Markup.button.callback(`🤖 ${agentName} bilan suhbat`, 'c:ai')]);
     const url = webappUrl(tenantId);

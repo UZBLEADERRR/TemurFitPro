@@ -6,8 +6,9 @@ import type { Role } from '../core/roles';
 import {
     listGroups, listMembers, findInactive, findMissingToday, getStats, memberReport, searchMembers,
 } from '../features/filters';
-import { enqueue, pendingSummary, cancelPending } from '../features/outbox';
+import { enqueue, recordSend, pendingSummary, cancelPending, listFailed } from '../features/outbox';
 import { activeConnection } from '../features/business';
+import { deliverToMember, describeAttempts, CHANNEL_LABEL, type Channel } from '../features/delivery';
 import { updateGroupTable } from '../features/table';
 import {
     purgeTenantData, pauseTenant, resumeTenant, addGroup, approveGroup, rejectGroup,
@@ -35,6 +36,9 @@ interface ToolDef {
     roles: Role[];
     run: (args: any, ctx: ToolContext) => Promise<unknown>;
 }
+
+/// AI javobi cho'zilib ketmasin — bundan ortig'i navbatga tushadi
+const IMMEDIATE_LIMIT = 20;
 
 const S = (d: string) => ({ type: 'string', description: d });
 const N = (d: string) => ({ type: 'number', description: d });
@@ -135,7 +139,8 @@ const TOOLS: Record<string, ToolDef> = {
         decl: {
             name: 'find_inactive',
             description:
-                "Oxirgi N kun ichida ovqat yubormagan a'zolarni topadi — murabbiyning eng ko'p ishlatadigan so'rovi. " +
+                "N kun KETMA-KET ovqat yubormagan a'zolarni topadi — murabbiyning eng ko'p ishlatadigan so'rovi. " +
+                "meal_type berilsa aynan o'sha vaqtdagi ovqat (masalan 2 kun ketma-ket nonushta rasmi) hisobga olinadi. " +
                 "Bugun yuborgan odam ro'yxatga kirmaydi.",
             parameters: {
                 type: 'object',
@@ -392,20 +397,29 @@ const TOOLS: Record<string, ToolDef> = {
         decl: {
             name: 'send_message_to_members',
             description:
-                "A'zolarga shaxsiy xabar yuboradi — MURABBIYNING O'Z NOMIDAN (Telegram Business orqali). " +
-                'Darhol yoki belgilangan vaqtda. Matnni murabbiy uslubida sen yozasan.',
+                "A'zolarga shaxsiy xabar yuboradi — birinchi navbatda MURABBIYNING O'Z NOMIDAN " +
+                '(Telegram Business orqali). Darhol yoki belgilangan vaqtda. Matnni murabbiy uslubida sen yozasan. ' +
+                "MUHIM: natijada `sent` va `failed` bo'ladi — kimga YETIB BORGANINI aynan shundan olib ayt, " +
+                "o'zingdan 'yuborildi' deb yozma.",
             parameters: {
                 type: 'object',
                 properties: {
                     text: S("Xabar matni. {name} — a'zo ismiga almashadi. Telegram HTML."),
                     member_ids: { type: 'array', items: { type: 'string' }, description: "A'zo id yoki ismlari" },
-                    filter_inactive_days: N('Shu kun davomida yubormaganlarga'),
+                    filter_inactive_days: N(
+                        "Shu necha kun KETMA-KET yubormaganlarga. meal_type bilan birga ishlatilsa — " +
+                            "aynan o'sha ovqatni shuncha kun ketma-ket yubormaganlar.",
+                    ),
                     filter_missing_today: B('Bugun yubormaganlarga'),
                     filter_meal_type: S('nonushta | tushlik | kechki | any'),
                     group: S("Guruh yoki 'all'"),
                     send_at: S("'YYYY-MM-DD HH:mm' (bot vaqt mintaqasida). Bo'sh — darhol."),
                     delay_minutes: N('Necha daqiqadan keyin'),
-                    channel: S('business (standart) yoki bot'),
+                    channel: S('business (standart, murabbiy nomidan) | bot | group'),
+                    fallback: B(
+                        "Standart true. Murabbiy nomidan o'tmasa bot orqali, u ham o'tmasa guruhda teglab yuboradi. " +
+                            'false — faqat tanlangan kanal.',
+                    ),
                 },
                 required: ['text'],
             },
@@ -447,8 +461,12 @@ const TOOLS: Record<string, ToolDef> = {
                 when = new Date(Date.now() + Number(a.delay_minutes) * 60_000);
             }
 
-            const channel = a.channel === 'bot' ? 'bot' : 'business';
-            if (channel === 'business' && !(await activeConnection(ctx.db, ctx.actorTgId))) {
+            const channel: Channel =
+                a.channel === 'bot' ? 'bot' : a.channel === 'group' ? 'group' : 'business';
+            const fallback = a.fallback !== false;
+            const businessReady = channel !== 'business' || !!(await activeConnection(ctx.db, ctx.actorTgId));
+
+            if (channel === 'business' && !businessReady && !fallback) {
                 return {
                     error:
                         "Telegram Business ulanishi yo'q — murabbiy nomidan yuborib bo'lmaydi. " +
@@ -456,26 +474,105 @@ const TOOLS: Record<string, ToolDef> = {
                 };
             }
 
-            for (const m of targets) {
+            const body = (m: any) => text.replace(/\{name\}/g, esc(m.name));
+            const immediate = when.getTime() <= Date.now() + 30_000;
+
+            // ---- Kelajakka rejalashtirilgan: faqat navbatga qo'yiladi ----
+            if (!immediate) {
+                for (const m of targets) {
+                    await enqueue(ctx.db, {
+                        memberId: m.id,
+                        chatId: m.telegramId,
+                        text: body(m),
+                        channel,
+                        scheduledFor: when,
+                        createdByTgId: ctx.actorTgId,
+                        batchId: ctx.batchId,
+                    });
+                }
+                await audit(ctx.tenant.id, ctx.actorTgId, 'ai.schedule_messages', `${targets.length} ta, ${channel}`);
+                return {
+                    sent: 0,
+                    scheduled: targets.length,
+                    recipients: targets.map(t => t.name),
+                    when: formatIn(when, tz, 'dd.MM.yyyy HH:mm'),
+                    note:
+                        "HALI YUBORILMADI. Foydalanuvchiga 'yuborildi' DEMA — " +
+                        "belgilangan vaqtda yuborilishi rejalashtirilganini ayt.",
+                };
+            }
+
+            // ---- Darhol: haqiqatan yuboramiz va HAQIQIY natijani qaytaramiz ----
+            const first = targets.slice(0, IMMEDIATE_LIMIT);
+            const rest = targets.slice(IMMEDIATE_LIMIT);
+            const delivered: string[] = [];
+            const failed: Array<{ name: string; reason: string }> = [];
+
+            for (const m of first) {
+                const res = await deliverToMember(
+                    ctx.db,
+                    ctx.tenant,
+                    { id: m.id, telegramId: m.telegramId, name: m.name },
+                    body(m),
+                    { preferred: channel, fallback, coachTgId: ctx.actorTgId },
+                );
+                await recordSend(ctx.db, {
+                    memberId: m.id,
+                    chatId: m.telegramId,
+                    text: body(m),
+                    channel,
+                    createdByTgId: ctx.actorTgId,
+                    batchId: ctx.batchId,
+                    ok: res.ok,
+                    via: res.via,
+                    error: res.error ?? describeAttempts(res.attempts),
+                });
+                if (res.ok) delivered.push(`${m.name} — ${CHANNEL_LABEL[res.via!]}`);
+                else failed.push({ name: m.name, reason: res.error ?? 'Yetib bormadi' });
+            }
+
+            // Juda ko'p bo'lsa qolganini navbatga qo'yamiz — AI javobi kutib qolmasin
+            for (const m of rest) {
                 await enqueue(ctx.db, {
                     memberId: m.id,
                     chatId: m.telegramId,
-                    text: text.replace(/\{name\}/g, esc(m.name)),
+                    text: body(m),
                     channel,
-                    scheduledFor: when,
                     createdByTgId: ctx.actorTgId,
                     batchId: ctx.batchId,
                 });
             }
 
-            await audit(ctx.tenant.id, ctx.actorTgId, 'ai.send_messages', `${targets.length} ta, ${channel}`);
-            const immediate = when.getTime() <= Date.now() + 30_000;
+            await audit(
+                ctx.tenant.id,
+                ctx.actorTgId,
+                'ai.send_messages',
+                `${delivered.length} yetdi, ${failed.length} xato, ${rest.length} navbatda`,
+            );
+
             return {
-                queued: targets.length,
-                recipients: targets.map(t => t.name),
-                channel,
-                when: immediate ? 'darhol' : formatIn(when, tz, 'dd.MM.yyyy HH:mm'),
+                sent: delivered.length,
+                delivered,
+                failed,
+                queued: rest.length,
+                note: failed.length
+                    ? "Ba'zilariga YETIB BORMADI. Har birining sababini foydalanuvchiga aynan ayt."
+                    : undefined,
             };
+        },
+    },
+
+    list_failed_messages: {
+        roles: ['super', 'coach'],
+        decl: {
+            name: 'list_failed_messages',
+            description:
+                "Yetib bormagan xabarlar ro'yxati va SABABI. Murabbiy 'nega yetib bormadi' deb so'rasa shuni chaqir.",
+            parameters: { type: 'object', properties: { limit: N('Nechta (standart 20)') } },
+        },
+        run: async (a, ctx) => {
+            const rows = await listFailed(ctx.db, Math.min(50, Number(a.limit) || 20));
+            return { count: rows.length, messages: rows };
         },
     },
 

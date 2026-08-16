@@ -179,6 +179,30 @@ Ulash (Telegram Premium talab qilinadi):
 
 Matnda `{name}` yozsangiz — har bir a'zoning ismiga almashadi.
 
+#### ⚠️ Telegram cheklovi: 24 soat qoidasi
+
+Telegram **sizning nomingizdan suhbat boshlashga ruxsat bermaydi** — faqat
+javob berishga. Ya'ni xabar sizning akkauntingizdan **faqat oxirgi 24 soat
+ichida sizga yozgan** odamga ketadi. Aks holda Telegram
+`BUSINESS_PEER_USAGE_MISSING` xatosini qaytaradi. Buni aylanib o'tishning iloji
+yo'q — bu Telegram tomonidagi spamga qarshi qoida.
+
+Shuning uchun bot xabarni **bosqichma-bosqich** yetkazadi:
+
+| # | Kanal | Qachon ishlaydi |
+|---|-------|-----------------|
+| 1 | 👤 Sizning nomingizdan | Odam oxirgi 24 soatda sizga yozgan bo'lsa |
+| 2 | 🤖 Bot nomidan shaxsiy | Odam botni `/start` qilgan bo'lsa |
+| 3 | 👥 Guruhda teglab | Deyarli har doim |
+
+Natijada bot **kimga qaysi yo'l bilan yetganini aniq aytadi** va hech qachon
+"yuborildi" deb yolg'on gapirmaydi. Yetib bormasa — sababi bilan sizga xabar
+keladi. Barcha holatni **📮 Xabarlar holati** tugmasidan ko'rasiz.
+
+> Hamma xabar sizning nomingizdan ketishini xohlasangiz: a'zolarga bir marta
+> o'zingiz yozing yoki ulardan sizga yozishni so'rang — shundan keyin 24 soat
+> oynasi ochiladi.
+
 ---
 
 ## A'zolar uchun
@@ -296,6 +320,7 @@ src/
     table.ts              Pinlangan jadval
     filters.ts            Saralash va statistika (guruhlar bo'yicha)
     business.ts           Telegram Business orqali yuborish
+    delivery.ts           Yetkazish zanjiri: business → bot → guruh teg
     outbox.ts             Rejalashtirilgan xabarlar navbati
   ai/gemini.ts            Gemini klienti (hozircha ishlatilmaydi)
   api/                    Mini ilova API + initData tekshiruvi

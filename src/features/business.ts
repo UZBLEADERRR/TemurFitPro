@@ -53,6 +53,32 @@ export async function activeConnection(db: TenantClient, coachTgId?: string) {
     });
 }
 
+/// Telegram xatolarini murabbiy tushunadigan tilga o'giramiz.
+/// Eng muhimi — BUSINESS_PEER_USAGE_MISSING: Telegram Business bot'ga
+/// biznes akkaunt nomidan FAQAT yaqinda yozgan odamga javob berishga ruxsat
+/// beradi. Ya'ni bot suhbatni o'zi boshlay olmaydi. Buni aylanib o'tishning
+/// iloji yo'q — shuning uchun zaxira kanalga (bot / guruh) o'tamiz.
+const ERROR_HINTS: Array<[RegExp, string]> = [
+    [
+        /business_peer_usage_missing/i,
+        "Telegram cheklovi: siz(ning akkauntingiz) nomidan xabar faqat oxirgi 24 soat ichida SIZGA yozgan odamga ketadi. " +
+            "Bu odam yaqinda yozmagan, shuning uchun Telegram xabarni o'tkazmadi.",
+    ],
+    [
+        /bot can't initiate conversation|bot was blocked|user is deactivated|chat not found|peer_id_invalid/i,
+        "Bu odam bot bilan shaxsiy suhbat boshlamagan yoki botni bloklagan — shaxsiy xabar yetib bormaydi.",
+    ],
+    [/business connection is not|connection.*not found/i, "Business ulanish uzilgan yoki bekor qilingan."],
+    [/too many requests|retry after/i, 'Telegram vaqtincha cheklab qo\'ydi, birozdan keyin qayta urinib ko\'ring.'],
+];
+
+/// Xom xato matni + odam tushunadigan izoh
+export function explainSendError(raw?: string | null): string {
+    const text = (raw || "Noma'lum xato").trim();
+    const hint = ERROR_HINTS.find(([re]) => re.test(text))?.[1];
+    return hint ? `${hint} (${text})` : text;
+}
+
 export interface SendResult {
     ok: boolean;
     channel: 'business' | 'bot';

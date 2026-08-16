@@ -14,7 +14,8 @@
     "typecheck": "npm run generate && npx tsc --noEmit",
     "generate": "npx prisma generate --schema prisma/platform.prisma && npx prisma generate --schema prisma/tenant.prisma",
     "sql:tenant": "npx prisma migrate diff --from-empty --to-schema-datamodel prisma/tenant.prisma --script > prisma/tenant-init.sql",
-    "postinstall": "npm run generate"
+    "postinstall": "npm run generate",
+    "test:delivery": "CONTROL_BOT_TOKEN=1:test ENCRYPTION_KEY=dGVzdC1rZXktZm9yLXVuaXQtdGVzdHMtMDEyMzQ1Ng== SUPER_ADMIN_IDS=1 PUBLIC_URL=https://example.test AI_ENABLED=false DATA_DIR=$(mktemp -d) sh -c 'node scripts/prestart.js && npx tsx scripts/test-delivery.ts'"
   },
   "license": "ISC",
   "dependencies": {
