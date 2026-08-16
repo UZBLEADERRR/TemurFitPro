@@ -22,23 +22,44 @@ export const prisma = new PlatformClient({
 
 const tenantClients = new Map<string, TenantClient>();
 
-/// Tenant DDL — birinchi marta ochilganda ishlatiladi.
-/// `npm run sql:tenant` bilan sxemadan avtomatik yaratiladi.
-let initSql: string | null = null;
+/// Tenant SQL fayllari:
+///   tenant-init.sql       — sxemadan avtomatik (npm run sql:tenant), yangi bazalar uchun
+///   tenant-migrations.sql — qo'lda yozilgan idempotent ALTER'lar, eski bazalar uchun
+const sqlCache = new Map<string, string>();
 
-function loadInitSql(): string {
-    if (initSql !== null) return initSql;
-    const candidates = [
-        path.join(process.cwd(), 'prisma', 'tenant-init.sql'),
-        path.join(__dirname, '..', '..', 'prisma', 'tenant-init.sql'),
-    ];
-    for (const c of candidates) {
-        if (fs.existsSync(c)) {
-            initSql = fs.readFileSync(c, 'utf8');
-            return initSql;
+function loadSql(name: string, required = true): string {
+    const cached = sqlCache.get(name);
+    if (cached !== undefined) return cached;
+
+    for (const dir of [path.join(process.cwd(), 'prisma'), path.join(__dirname, '..', '..', 'prisma')]) {
+        const file = path.join(dir, name);
+        if (fs.existsSync(file)) {
+            const content = fs.readFileSync(file, 'utf8');
+            sqlCache.set(name, content);
+            return content;
         }
     }
-    throw new Error("prisma/tenant-init.sql topilmadi — `npm run sql:tenant` ni ishga tushiring");
+
+    if (required) throw new Error(`prisma/${name} topilmadi — \`npm run sql:tenant\` ni ishga tushiring`);
+    sqlCache.set(name, '');
+    return '';
+}
+
+/// SQL faylni buyruqlarga bo'lish.
+///
+/// Izohlar AVVAL olib tashlanadi, keyin `;` bo'yicha bo'linadi. Teskarisi qilinsa,
+/// izoh ichidagi nuqtali vergul matnni bo'lib yuboradi va izohning qolgan qismi
+/// SQL bo'lib qoladi.
+function statements(sql: string): string[] {
+    const withoutComments = sql
+        .split('\n')
+        .filter(line => !line.trim().startsWith('--'))
+        .join('\n');
+
+    return withoutComments
+        .split(';')
+        .map(chunk => chunk.trim())
+        .filter(Boolean);
 }
 
 async function applySchema(client: TenantClient): Promise<void> {
@@ -50,26 +71,88 @@ async function applySchema(client: TenantClient): Promise<void> {
         await client.$queryRawUnsafe(pragma).catch(() => undefined);
     }
 
-    // Fayl `-- CreateTable` izohlari bilan bo'lingan. Har bir bo'lakdan izoh
-    // qatorlarini olib tashlaymiz — aks holda butun bo'lak izoh deb tashlanadi.
-    const statements = loadInitSql()
-        .split(';')
-        .map(chunk =>
-            chunk
-                .split('\n')
-                .filter(line => !line.trim().startsWith('--'))
-                .join('\n')
-                .trim(),
-        )
-        .filter(Boolean);
+    // Tartib MUHIM: jadval → ustun qo'shish → indeks.
+    // Indeks yangi ustun ustida bo'lishi mumkin (masalan Group(isActive, status)).
+    // Uni ALTER'dan oldin yaratishga urinsak, eski bazada "no such column" chiqib
+    // bot umuman ishga tushmay qoladi.
+    const initStatements = statements(loadSql('tenant-init.sql'));
+    const isIndex = (s: string) => /^CREATE\s+(UNIQUE\s+)?INDEX/i.test(s);
 
-    for (const stmt of statements) {
-        // IF NOT EXISTS — mavjud bazani qayta ochganda xato bermasin
+    // 1) Jadvallarni yaratish (mavjud bo'lsa tegmaydi)
+    for (const stmt of initStatements.filter(s => !isIndex(s))) {
+        await client.$executeRawUnsafe(stmt.replace(/^CREATE TABLE "/i, 'CREATE TABLE IF NOT EXISTS "'));
+    }
+
+    // 2) Eski bazalarga yetishmayotgan ustunlarni qo'shish.
+    // ALTER'ni ko'r-ko'rona bajarib xatoni yutish ham mumkin edi, lekin u holda
+    // Prisma har ishga tushishda konsolga qizil "duplicate column" yozadi va
+    // haqiqiy nosozlikni ko'rish qiyinlashadi. Shuning uchun avval tekshiramiz.
+    const added: string[] = [];
+
+    for (const stmt of statements(loadSql('tenant-migrations.sql', false))) {
+        const add = /^ALTER\s+TABLE\s+"([^"]+)"\s+ADD\s+COLUMN\s+"([^"]+)"/i.exec(stmt);
+        if (add && (await hasColumn(client, add[1], add[2]))) continue;
+
+        try {
+            await client.$executeRawUnsafe(stmt);
+            if (add) {
+                added.push(`${add[1]}.${add[2]}`);
+                log.info('db', `ustun qo'shildi: ${add[1]}.${add[2]}`);
+            }
+        } catch (e) {
+            if (String(e).toLowerCase().includes('duplicate column')) continue;
+            log.warn('db', `migratsiya o'tmadi: ${stmt.slice(0, 60)}… — ${String(e).slice(0, 160)}`);
+        }
+    }
+
+    // 3) Indekslar — endi yangi ustunlar mavjud
+    for (const stmt of initStatements.filter(isIndex)) {
         const safe = stmt
-            .replace(/^CREATE TABLE "/i, 'CREATE TABLE IF NOT EXISTS "')
             .replace(/^CREATE UNIQUE INDEX "/i, 'CREATE UNIQUE INDEX IF NOT EXISTS "')
             .replace(/^CREATE INDEX "/i, 'CREATE INDEX IF NOT EXISTS "');
-        await client.$executeRawUnsafe(safe);
+        try {
+            await client.$executeRawUnsafe(safe);
+        } catch (e) {
+            // Indeks yaratilmasa ishlash sekinlashadi, lekin bot to'xtamasligi kerak
+            log.warn('db', `indeks yaratilmadi: ${safe.slice(0, 70)}… — ${String(e).slice(0, 120)}`);
+        }
+    }
+
+    // 4) Ustun endi qo'shilgan bo'lsa — eski qatorlarni to'ldirish.
+    // Bu shart MUHIM: ustun qo'shilgani "bu baza yangilanishdan oldin ishlab
+    // turgan edi" degani. Yangi bazada ustun tenant-init.sql da bor, ALTER
+    // o'tkazib yuboriladi va backfill ham ishlamaydi.
+    for (const key of added) {
+        for (const stmt of AFTER_COLUMN_ADDED[key] ?? []) {
+            try {
+                const n = await client.$executeRawUnsafe(stmt);
+                log.info('db', `${key} uchun to'ldirildi: ${n} qator`);
+            } catch (e) {
+                log.warn('db', `to'ldirish o'tmadi (${key}): ${String(e).slice(0, 160)}`);
+            }
+        }
+    }
+}
+
+/// Ustun QO'SHILGANDA (ya'ni faqat eski bazalarda) bajariladigan to'ldirishlar.
+///
+/// Sanaga qarab filtrlashga urinmang: Prisma SQLite'da DateTime'ni son sifatida
+/// saqlaydi, SQLite'da esa son har doim matndan kichik — `createdAt < '2026-08-16'`
+/// kabi shart HAMMA qatorga to'g'ri keladi va yangi yozuvlarni ham o'zgartirib yuboradi.
+const AFTER_COLUMN_ADDED: Record<string, string[]> = {
+    // Guruh tasdiqlash joriy qilinishidan oldin mavjud guruhlar allaqachon
+    // ishlab turgan edi — ularni qayta tasdiqlatish botlarni to'xtatib qo'yardi.
+    'Group.status': [`UPDATE "Group" SET "status" = 'approved', "approvedAt" = CURRENT_TIMESTAMP`],
+};
+
+async function hasColumn(client: TenantClient, table: string, column: string): Promise<boolean> {
+    try {
+        const rows = await client.$queryRawUnsafe<Array<{ name: string }>>(
+            `PRAGMA table_info("${table.replace(/"/g, '')}")`,
+        );
+        return rows.some(r => r.name === column);
+    } catch {
+        return false;
     }
 }
 

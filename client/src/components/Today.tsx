@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, MEALS, type Board, type Me, type Streak } from '../lib/api';
 import { Avatar, Card, MealDots, Empty, Loading } from './bits';
 import { haptic } from '../lib/telegram';
@@ -16,7 +16,17 @@ function humanDate(date: string, today: string): string {
     return d.toLocaleDateString('uz-UZ', { day: 'numeric', month: 'long' });
 }
 
-export default function Today({ me, onPick }: { me: Me; onPick: (id: string) => void }) {
+export default function Today({
+    me,
+    group,
+    onPick,
+    children,
+}: {
+    me: Me;
+    group: string | null;
+    onPick: (id: string) => void;
+    children?: ReactNode;
+}) {
     const today = useMemo(() => new Date().toLocaleDateString('en-CA', { timeZone: me.tenant.timezone }), [me]);
     const [date, setDate] = useState(today);
     const [board, setBoard] = useState<Board | null>(null);
@@ -26,14 +36,14 @@ export default function Today({ me, onPick }: { me: Me; onPick: (id: string) => 
     useEffect(() => {
         let live = true;
         setLoading(true);
-        api.board(date)
+        api.board(date, group ?? undefined)
             .then(b => live && setBoard(b))
             .catch(() => live && setBoard(null))
             .finally(() => live && setLoading(false));
         return () => {
             live = false;
         };
-    }, [date]);
+    }, [date, group]);
 
     useEffect(() => {
         if (!me.member) return;
@@ -79,6 +89,8 @@ export default function Today({ me, onPick }: { me: Me; onPick: (id: string) => 
                     </button>
                 </div>
             </div>
+
+            {children}
 
             {streak !== null && me.role === 'member' && (
                 <Card title="Mening seriyam">

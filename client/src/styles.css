@@ -588,3 +588,59 @@ textarea:focus {
     font-size: 13px;
     margin-bottom: 12px;
 }
+
+/* ---------- Guruh filtri ---------- */
+.chips {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding: 0 0 12px;
+    margin: 0 calc(-1 * var(--pad));
+    padding-left: var(--pad);
+    padding-right: var(--pad);
+    scrollbar-width: none;
+}
+
+.chips::-webkit-scrollbar {
+    display: none;
+}
+
+.chips button {
+    flex: 0 0 auto;
+    padding: 7px 13px;
+    border-radius: 18px;
+    background: var(--card);
+    color: var(--hint);
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    transition: background 0.15s, color 0.15s;
+}
+
+.chips button.on {
+    background: var(--accent);
+    color: var(--accent-ink);
+}
+
+.chips button .n {
+    opacity: 0.6;
+    font-weight: 500;
+    margin-left: 3px;
+}
+
+/* Qatordagi ikkinchi harakat tugmasi (tarixni ochish) */
+.row-action {
+    flex-shrink: 0;
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    display: grid;
+    place-items: center;
+    font-size: 15px;
+    background: var(--bg);
+    color: var(--hint);
+}
+
+:root[data-scheme='dark'] .row-action {
+    background: #0b0d11;
+}

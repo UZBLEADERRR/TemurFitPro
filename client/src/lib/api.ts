@@ -74,6 +74,9 @@ export interface BoardMember {
     name: string;
     role: string;
     timezone: string;
+    /// Murabbiyga beriladi — profilga o'tish uchun
+    telegramId?: string;
+    username?: string | null;
     groups: { id: string; title: string }[];
     meals: Record<MealKey, MealStatus>;
 }
@@ -118,6 +121,8 @@ export interface MemberBrief {
 export interface InactiveRow {
     id: string;
     name: string;
+    telegramId: string;
+    username: string | null;
     lastMealDate: string | null;
     daysSince: number | null;
     groups: string[];
@@ -131,7 +136,7 @@ export interface MissingRow {
 }
 
 export interface MemberDetail {
-    member: { id: string; name: string; timezone: string; role: string };
+    member: { id: string; name: string; timezone: string; role: string; telegramId?: string; username?: string | null };
     days: { date: string; meals: { meal: MealKey; status: string; at: string | null }[] }[];
     total: number;
     expected: number;

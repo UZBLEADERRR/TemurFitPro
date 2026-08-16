@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, MEALS, type MemberDetail } from '../lib/api';
 import { Avatar, Loading } from './bits';
+import { openProfile } from '../lib/telegram';
 
 const MARK: Record<string, { cls: string; ch: string }> = {
     on_time: { cls: 'on_time', ch: '✓' },
@@ -86,7 +87,17 @@ export default function MemberSheet({ id, onClose }: { id: string; onClose: () =
                             ))}
                         </div>
 
-                        <button className="btn ghost" style={{ marginTop: 18 }} onClick={onClose}>
+                        {(data.member.username || data.member.telegramId) && (
+                            <button
+                                className="btn"
+                                style={{ marginTop: 18 }}
+                                onClick={() => openProfile(data.member)}
+                            >
+                                💬 Telegramda ochish
+                            </button>
+                        )}
+
+                        <button className="btn ghost" style={{ marginTop: 8 }} onClick={onClose}>
                             Yopish
                         </button>
                     </>

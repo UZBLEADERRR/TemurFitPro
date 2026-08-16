@@ -3,6 +3,7 @@ import type { TenantClient } from '../core/db';
 import { MEAL_TYPES, MEAL_LABELS, MealType } from '../core/meals';
 import { todayIn, lastNDates, daysAgoIn, safeTz, formatIn } from '../core/time';
 import { esc } from '../core/telegram';
+import { LIVE_GROUP } from '../core/groups';
 
 export interface MemberBrief {
     id: string;
@@ -60,7 +61,7 @@ function groupScope(groupId?: string | null) {
 }
 
 export async function listGroups(db: TenantClient) {
-    return db.group.findMany({ where: { isActive: true }, orderBy: { createdAt: 'asc' } });
+    return db.group.findMany({ where: LIVE_GROUP, orderBy: { createdAt: 'asc' } });
 }
 
 export async function listMembers(

@@ -18,7 +18,9 @@ import {
 } from '../features/filters';
 import { saveBusinessConnection, connectionSummary } from '../features/business';
 import { enqueue } from '../features/outbox';
-import { isSuperAdmin, addGroup, purgeGroupData } from '../core/tenants';
+import { isSuperAdmin, registerIncomingGroup, markGroupLeft } from '../core/tenants';
+import { notifySuperAdmins } from '../features/notify';
+import { LIVE_GROUP, statusBadge } from '../core/groups';
 import { getTenantState, setTenantState, clearTenantState } from './session';
 import { coachMenu, memberMenu, inactiveMenu, statsMenu, settingsMenu, backTo } from './ui';
 import crypto from 'crypto';
@@ -45,26 +47,26 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
         const status = ctx.myChatMember.new_chat_member.status;
 
         if (status === 'member' || status === 'administrator') {
-            const res = await addGroup(ctxData.tenant, String(chat.id), (chat as any).title || '').catch(() => null);
-            if (res?.created) {
-                log.info('tenant-bot', `yangi guruh ulandi: ${chat.id} (tenant=${tenantId})`);
+            const title = (chat as any).title || '';
+            const g = await registerIncomingGroup(ctxData.tenant, String(chat.id), title).catch(e => {
+                log.error('tenant-bot', `guruhni ro'yxatga olishda xato: ${tgError(e)}`);
+                return null;
+            });
+            if (!g) return;
+
+            if (!g.needsApproval) {
+                // Ilgari tasdiqlangan guruh — bot qaytib keldi
+                log.info('tenant-bot', `tasdiqlangan guruhga qaytdi: ${chat.id}`);
                 await ctx.telegram
-                    .sendMessage(
-                        chat.id,
-                        [
-                            '✅ <b>Bot ulandi!</b>',
-                            '',
-                            'Ovqat rasmini hashtag bilan yuboring:',
-                            '<code>#nonushta</code> · <code>#tushlik</code> · <code>#kechki</code>',
-                            '',
-                            'Botni <b>admin</b> qiling — shunda jadvalni pinlay oladi va eslatmalarni tozalaydi.',
-                        ].join('\n'),
-                        { parse_mode: 'HTML' },
-                    )
+                    .sendMessage(chat.id, welcomeText(), { parse_mode: 'HTML' })
                     .catch(() => undefined);
+                return;
             }
+
+            log.info('tenant-bot', `yangi guruh tasdiq kutmoqda: ${chat.id} (tenant=${tenantId})`);
+            await askSuperAdminApproval(ctxData.tenant, g, chat);
         } else if (status === 'left' || status === 'kicked') {
-            await ctxData.db.group.updateMany({ where: { chatId: String(chat.id) }, data: { isActive: false } });
+            await markGroupLeft(ctxData.tenant, String(chat.id));
         }
     });
 
@@ -195,8 +197,11 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
         }
         const ctxData = await load();
         if (!ctxData) return;
-        const group = await ctxData.db.group.findUnique({ where: { chatId: String(ctx.chat.id) } });
-        if (!group?.isActive) return;
+        // Tasdiqlanmagan guruhda hech narsa qayd etilmaydi
+        const group = await ctxData.db.group.findFirst({
+            where: { chatId: String(ctx.chat.id), ...LIVE_GROUP },
+        });
+        if (!group) return;
         await handleGroupMeal(ctx, ctxData.db, ctxData.tenant, group).catch(e =>
             log.error('tenant-bot', `ovqat qaydida xato: ${tgError(e)}`),
         );
@@ -211,8 +216,8 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
         if (ctx.chat.type !== 'private') {
             // Guruhda: rasm majburiy bo'lmasa hashtag ham qabul qilinadi
             if (tenant.requirePhoto) return;
-            const group = await db.group.findUnique({ where: { chatId: String(ctx.chat.id) } });
-            if (group?.isActive) await handleGroupMeal(ctx, db, tenant, group).catch(() => undefined);
+            const group = await db.group.findFirst({ where: { chatId: String(ctx.chat.id), ...LIVE_GROUP } });
+            if (group) await handleGroupMeal(ctx, db, tenant, group).catch(() => undefined);
             return;
         }
 
@@ -270,7 +275,7 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
         const manager = isCoachRole(member.role) || (await isSuperAdmin(String(ctx.from!.id)));
 
         if (manager) {
-            const groups = await db.group.count({ where: { isActive: true } });
+            const groups = await db.group.count({ where: LIVE_GROUP });
             const people = await db.member.count({ where: { status: 'active', role: 'member' } });
             const head = greet
                 ? `👋 Salom, <b>${esc(member.name)}</b>!\n\n🏠 ${groups} guruh · 👥 ${people} a'zo`
@@ -298,7 +303,7 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
         groupId: string | null,
     ) {
         const rows = await findInactive(db, tenant, { days, groupId });
-        const totalGroups = await db.group.count({ where: { isActive: true } });
+        const totalGroups = await db.group.count({ where: LIVE_GROUP });
         await setTenantState(tenant.botId, String(ctx.chat!.id), 'idle', { days, groupId });
         await reply(ctx, formatInactive(rows, days, totalGroups), inactiveMenu(days, groupId));
     }
@@ -370,27 +375,40 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
             }
 
             case 'groups': {
-                const groups = await listGroups(db);
-                if (groups.length === 0) {
+                const all = await db.group.findMany({ where: { isActive: true }, orderBy: { createdAt: 'asc' } });
+                if (all.length === 0) {
                     await reply(
                         ctx,
-                        "🏠 Hali guruh yo'q.\n\n<i>Botni guruhga qo'shsangiz avtomatik ro'yxatga olinadi.</i>",
+                        "🏠 Hali guruh yo'q.\n\n<i>Botni guruhga qo'shing — administrator tasdiqlagach ishga tushadi.</i>",
                         backTo('c:menu'),
                     );
                     return;
                 }
                 const rows = await Promise.all(
-                    groups.map(async g => {
+                    all.map(async g => {
                         const n = await db.groupMember.count({ where: { groupId: g.id } });
+                        const mark = g.status === 'approved' ? '🏠' : g.status === 'pending' ? '⏳' : '❌';
                         return [
-                            Markup.button.callback(`🏠 ${(g.title || g.chatId).slice(0, 26)} (${n})`, `c:group:${g.id}`),
+                            Markup.button.callback(
+                                `${mark} ${(g.title || g.chatId).slice(0, 24)} (${n})`,
+                                `c:group:${g.id}`,
+                            ),
                         ];
                     }),
                 );
                 rows.push([Markup.button.callback('⬅️ Menyu', 'c:menu')]);
+
+                const waiting = all.filter(g => g.status === 'pending').length;
                 await reply(
                     ctx,
-                    `🏠 <b>Guruhlar: ${groups.length}</b>\n\n<i>Guruhni tanlab tozalash yoki uzish mumkin.</i>`,
+                    [
+                        `🏠 <b>Guruhlar: ${all.length}</b>`,
+                        waiting ? `⏳ ${waiting} tasi administrator tasdig'ini kutmoqda` : '',
+                        '',
+                        '<i>Guruh qo\'shish va tasdiqlash administratorda.</i>',
+                    ]
+                        .filter(Boolean)
+                        .join('\n'),
                     Markup.inlineKeyboard(rows),
                 );
                 return;
@@ -408,13 +426,13 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
                     [
                         `🏠 <b>${esc(group.title || group.chatId)}</b>`,
                         `<code>${group.chatId}</code>`,
+                        `${statusBadge(group)}`,
                         '',
                         `👥 A'zolar: <b>${people}</b>`,
                         `🍽 Ovqat qaydlari: <b>${meals}</b>`,
                     ].join('\n'),
                     Markup.inlineKeyboard([
                         [Markup.button.callback('📊 Shu guruh jadvali', `c:gtable:${group.id}`)],
-                        [Markup.button.callback("🧹 Ma'lumotlarini tozalash", `c:gpurge:${group.id}`)],
                         [Markup.button.callback('⬅️ Guruhlar', 'c:groups')],
                     ]),
                 );
@@ -424,24 +442,6 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
             case 'gtable': {
                 const group = await db.group.findUnique({ where: { id: arg! } });
                 if (group) await reply(ctx, await renderTable(db, tenant, group), backTo(`c:group:${arg}`));
-                return;
-            }
-
-            case 'gpurge': {
-                await reply(
-                    ctx,
-                    "⚠️ <b>Tasdiqlang</b>\n\nShu guruhning ovqat tarixi, eslatmalari va faqat shu guruhdagi a'zolari o'chiriladi. Qaytarib bo'lmaydi.",
-                    Markup.inlineKeyboard([
-                        [Markup.button.callback("✅ Ha, tozala", `c:gpurgeok:${arg}`)],
-                        [Markup.button.callback('❌ Bekor', `c:group:${arg}`)],
-                    ]),
-                );
-                return;
-            }
-
-            case 'gpurgeok': {
-                const summary = await purgeGroupData(tenant, arg!, String(ctx.from!.id));
-                await reply(ctx, `🧹 Tozalandi: ${esc(summary)}`, backTo('c:groups'));
                 return;
             }
 
@@ -618,6 +618,58 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
         for (const g of groups) parts.push(await renderTable(db, tenant, g));
         parts.push(formatMissingToday(await findMissingToday(db, {})));
         return parts.join('\n\n──────────\n\n');
+    }
+}
+
+/// Guruhga yuboriladigan tanishtiruv matni
+function welcomeText(): string {
+    return [
+        '✅ <b>Bot ishga tushdi!</b>',
+        '',
+        'Ovqat rasmini hashtag bilan yuboring:',
+        '<code>#nonushta</code> · <code>#tushlik</code> · <code>#kechki</code>',
+        '',
+        'Botni <b>admin</b> qiling — shunda jadvalni pinlay oladi va eslatmalarni tozalaydi.',
+    ].join('\n');
+}
+
+/// Yangi guruh uchun super admindan tasdiq so'rash.
+/// Guruhlarni faqat super admin qabul qiladi, shuning uchun bot guruhda
+/// tasdiqlangunicha jim turadi.
+async function askSuperAdminApproval(tenant: Tenant, g: { id: string; title: string; chatId: string }, chat: any) {
+    const memberCount = await (async () => {
+        try {
+            const { getBotByTenant } = await import('../core/registry');
+            const bot = getBotByTenant(tenant.id);
+            return bot ? await bot.telegram.getChatMembersCount(chat.id) : null;
+        } catch {
+            return null;
+        }
+    })();
+
+    const sent = await notifySuperAdmins(
+        [
+            '🆕 <b>Yangi guruh tasdiq kutmoqda</b>',
+            '',
+            `🤖 Bot: @${esc(tenant.botUsername)}`,
+            `🏠 Guruh: <b>${esc(g.title || '(nomsiz)')}</b>`,
+            `🆔 <code>${g.chatId}</code>`,
+            memberCount !== null ? `👥 A'zolar: ${memberCount}` : '',
+            '',
+            "<i>Tasdiqlanmaguncha bu guruhda hech narsa qayd etilmaydi.</i>",
+        ]
+            .filter(Boolean)
+            .join('\n'),
+        Markup.inlineKeyboard([
+            [
+                Markup.button.callback('✅ Tasdiqlash', `s:gok:${tenant.id}:${g.id}`),
+                Markup.button.callback('❌ Rad etish', `s:gno:${tenant.id}:${g.id}`),
+            ],
+        ]),
+    );
+
+    if (sent === 0) {
+        log.warn('tenant-bot', "guruh tasdig'i uchun hech bir super adminga xabar yetmadi");
     }
 }
 

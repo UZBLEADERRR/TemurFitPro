@@ -8,6 +8,7 @@ import { todayIn, safeTz } from '../core/time';
 import { tgError, withRetry, esc } from '../core/telegram';
 import { webappUrl } from '../core/env';
 import { log } from '../core/logger';
+import { LIVE_GROUP } from '../core/groups';
 
 const MARK_DONE = '🟢';
 const MARK_LATE = '🟡';
@@ -138,7 +139,7 @@ export async function createAndPinTable(
 export async function refreshTablesForMember(tenant: Tenant, memberId: string): Promise<void> {
     const db = await tenantDb(tenant.botId);
     const links = await db.groupMember.findMany({
-        where: { memberId, group: { isActive: true } },
+        where: { memberId, group: LIVE_GROUP },
         include: { group: true },
     });
     for (const link of links) {

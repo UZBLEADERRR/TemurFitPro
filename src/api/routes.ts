@@ -62,6 +62,10 @@ api.get('/board', wrap(async (req, res) => {
         where: { date, memberId: { in: members.map(m => m.id) } },
     });
 
+    // Murabbiyga telegramId/username ham beriladi — ilovada odamning
+    // Telegram profiliga o'tish uchun kerak. A'zoga boshqalarniki berilmaydi.
+    const canSeeContacts = req.role !== 'member';
+
     res.json({
         date,
         members: members.map(m => ({
@@ -69,6 +73,7 @@ api.get('/board', wrap(async (req, res) => {
             name: m.name,
             role: m.role,
             timezone: m.timezone,
+            ...(canSeeContacts ? { telegramId: m.telegramId, username: m.username } : {}),
             groups: m.groups.map(g => ({ id: g.groupId, title: g.group.title || g.group.chatId })),
             meals: Object.fromEntries(
                 MEAL_TYPES.map(t => {
@@ -126,7 +131,15 @@ api.get('/member/:id', wrap(async (req, res) => {
     const rep = await memberReport(req.db, id, days);
     if (!rep) return res.status(404).json({ error: "A'zo topilmadi" });
     res.json({
-        member: { id: rep.member.id, name: rep.member.name, timezone: rep.member.timezone, role: rep.member.role },
+        member: {
+            id: rep.member.id,
+            name: rep.member.name,
+            timezone: rep.member.timezone,
+            role: rep.member.role,
+            ...(req.role !== 'member'
+                ? { telegramId: rep.member.telegramId, username: rep.member.username }
+                : {}),
+        },
         days: rep.byDate,
         total: rep.total,
         expected: rep.expected,
