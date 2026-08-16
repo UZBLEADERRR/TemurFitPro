@@ -130,7 +130,15 @@ api.get('/member/:id', wrap(async (req, res) => {
 
     const rep = await memberReport(req.db, id, days);
     if (!rep) return res.status(404).json({ error: "A'zo topilmadi" });
+
+    // Eslatma holati — murabbiy ilovadan o'chirib/yoqib qo'yishi uchun
+    const overrides = await req.db.reminderOverride.findMany({ where: { memberId: id } });
+    const reminders = Object.fromEntries(
+        MEAL_TYPES.map(t => [t, !overrides.some(o => o.mealType === t && o.muted)]),
+    );
+
     res.json({
+        reminders,
         member: {
             id: rep.member.id,
             name: rep.member.name,

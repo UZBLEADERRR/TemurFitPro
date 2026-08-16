@@ -50,6 +50,11 @@ export const api = {
     saveSettings: (body: Partial<Settings>) =>
         request<{ ok: boolean }>('/settings', { method: 'POST', body: JSON.stringify(body) }),
     business: () => request<BusinessInfo>('/business'),
+    setReminder: (memberId: string, mealType: MealKey, muted: boolean) =>
+        request<{ ok: boolean }>('/reminder-override', {
+            method: 'POST',
+            body: JSON.stringify({ memberId, mealType, muted }),
+        }),
 };
 
 // ===== Tiplar =====
@@ -136,6 +141,8 @@ export interface MissingRow {
 }
 
 export interface MemberDetail {
+    /// Har bir ovqat uchun eslatma YOQILGANmi (true = keladi)
+    reminders: Record<MealKey, boolean>;
     member: { id: string; name: string; timezone: string; role: string; telegramId?: string; username?: string | null };
     days: { date: string; meals: { meal: MealKey; status: string; at: string | null }[] }[];
     total: number;

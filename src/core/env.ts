@@ -25,8 +25,9 @@ export const env = {
         (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : '')
     ).replace(/\/+$/, ''),
 
-    /// AI hozircha O'CHIRILGAN. Yoqish uchun AI_ENABLED=true va GEMINI_API_KEY kerak.
-    AI_ENABLED: bool('AI_ENABLED', false),
+    /// AI yoqilgan. Ishlashi uchun GEMINI_API_KEY ham kerak —
+    /// kalit bo'lmasa bot AI'siz to'liq ishlayveradi.
+    AI_ENABLED: bool('AI_ENABLED', true),
     GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
     GEMINI_MODEL: process.env.GEMINI_MODEL || 'gemini-3-flash-preview',
 

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { api, MEALS, type MemberDetail } from '../lib/api';
-import { Avatar, Loading } from './bits';
-import { openProfile } from '../lib/telegram';
+import { api, MEALS, type MealKey, type MemberDetail } from '../lib/api';
+import { Avatar, Loading, Switch } from './bits';
+import { openProfile, haptic } from '../lib/telegram';
 
 const MARK: Record<string, { cls: string; ch: string }> = {
     on_time: { cls: 'on_time', ch: '✓' },
@@ -9,9 +9,37 @@ const MARK: Record<string, { cls: string; ch: string }> = {
     missing: { cls: 'missing', ch: '·' },
 };
 
-export default function MemberSheet({ id, onClose }: { id: string; onClose: () => void }) {
+export default function MemberSheet({
+    id,
+    canEdit,
+    onClose,
+}: {
+    id: string;
+    /// Murabbiy eslatmalarni o'chirib/yoqib qo'ya oladi
+    canEdit: boolean;
+    onClose: () => void;
+}) {
     const [data, setData] = useState<MemberDetail | null>(null);
     const [error, setError] = useState('');
+    const [saving, setSaving] = useState<MealKey | null>(null);
+
+    /// Eslatmani yoqish/o'chirish. Ekranni darrov yangilaymiz, xato bo'lsa qaytaramiz.
+    const toggleReminder = async (meal: MealKey, on: boolean) => {
+        if (!data || saving) return;
+        setSaving(meal);
+        const prev = data.reminders;
+        setData({ ...data, reminders: { ...prev, [meal]: on } });
+        try {
+            await api.setReminder(id, meal, !on);
+            haptic('success');
+        } catch (e) {
+            setData(d => (d ? { ...d, reminders: prev } : d));
+            setError(e instanceof Error ? e.message : 'Saqlanmadi');
+            haptic('error');
+        } finally {
+            setSaving(null);
+        }
+    };
 
     useEffect(() => {
         let live = true;
@@ -86,6 +114,26 @@ export default function MemberSheet({ id, onClose }: { id: string; onClose: () =
                                 </div>
                             ))}
                         </div>
+
+                        {canEdit && (
+                            <>
+                                <p className="card-title" style={{ marginTop: 18 }}>
+                                    Eslatmalar
+                                </p>
+                                <p style={{ fontSize: 12, color: 'var(--hint)', margin: '0 0 8px' }}>
+                                    O'chirilgan ovqat uchun guruhda eslatma yozilmaydi
+                                </p>
+                                {MEALS.map(m => (
+                                    <div key={m.key} className="field">
+                                        <label>{m.label}</label>
+                                        <Switch
+                                            on={data.reminders[m.key]}
+                                            onChange={v => toggleReminder(m.key, v)}
+                                        />
+                                    </div>
+                                ))}
+                            </>
+                        )}
 
                         {(data.member.username || data.member.telegramId) && (
                             <button

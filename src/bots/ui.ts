@@ -3,9 +3,9 @@ import { webappUrl } from '../core/env';
 
 /// Barcha menyular inline tugmalarda — foydalanuvchi buyruq yodlamaydi.
 
-export function coachMenu(tenantId: string) {
+export function coachMenu(tenantId: string, agentName?: string) {
     const rows: any[] = [
-        [Markup.button.callback("⚠️ Yubormaganlar", 'c:inactive:2')],
+        [Markup.button.callback('⚠️ Yubormaganlar', 'c:inactive:2')],
         [
             Markup.button.callback('📊 Bugungi holat', 'c:today'),
             Markup.button.callback('📈 Reyting', 'c:stats:7'),
@@ -19,6 +19,7 @@ export function coachMenu(tenantId: string) {
             Markup.button.callback('🔌 Business', 'c:business'),
         ],
     ];
+    if (agentName) rows.push([Markup.button.callback(`🤖 ${agentName} bilan suhbat`, 'c:ai')]);
     const url = webappUrl(tenantId);
     if (url) rows.push([Markup.button.webApp('📱 Mini ilova', url)]);
     return Markup.inlineKeyboard(rows);
@@ -62,14 +63,18 @@ export function statsMenu(days: number) {
     return Markup.inlineKeyboard([[opt(7), opt(14), opt(30)], [Markup.button.callback('⬅️ Menyu', 'c:menu')]]);
 }
 
-export function settingsMenu(t: {
-    breakfastTime: string;
-    lunchTime: string;
-    dinnerTime: string;
-    reminderInterval: number;
-    maxReminders: number;
-    requirePhoto: boolean;
-}) {
+export function settingsMenu(
+    t: {
+        breakfastTime: string;
+        lunchTime: string;
+        dinnerTime: string;
+        reminderInterval: number;
+        maxReminders: number;
+        requirePhoto: boolean;
+        agentName: string;
+    },
+    aiOn = false,
+) {
     return Markup.inlineKeyboard([
         [Markup.button.callback(`🌅 Nonushta — ${t.breakfastTime}`, 'c:set:breakfastTime')],
         [Markup.button.callback(`🌞 Tushlik — ${t.lunchTime}`, 'c:set:lunchTime')],
@@ -79,6 +84,12 @@ export function settingsMenu(t: {
             Markup.button.callback(`🔁 Maks — ${t.maxReminders}`, 'c:set:maxReminders'),
         ],
         [Markup.button.callback(`📷 Rasm majburiy: ${t.requirePhoto ? 'ha' : "yo'q"}`, 'c:toggle:requirePhoto')],
+        ...(aiOn
+            ? [
+                  [Markup.button.callback(`🤖 AI ismi — ${t.agentName}`, 'c:set:agentName')],
+                  [Markup.button.callback('✍️ Yozish uslubim', 'c:set:coachStyle')],
+              ]
+            : []),
         [Markup.button.callback('⬅️ Menyu', 'c:menu')],
     ]);
 }
