@@ -16,10 +16,16 @@ export interface FunctionDeclaration {
     };
 }
 
+/// Gemini 3 `functionCall` qismlariga `thoughtSignature` qo'shib qaytaradi va
+/// keyingi so'rovda uni O'ZGARISHSIZ qaytarishni talab qiladi. Shuning uchun
+/// model javobini qayta yig'maymiz — borligicha saqlaymiz.
 export type Part =
-    | { text: string }
+    | { text: string; thoughtSignature?: string }
     | { inlineData: { mimeType: string; data: string } }
-    | { functionCall: { name: string; args: Record<string, unknown> } }
+    | {
+          functionCall: { name: string; args: Record<string, unknown> };
+          thoughtSignature?: string;
+      }
     | { functionResponse: { name: string; response: Record<string, unknown> } };
 
 export interface Content {
@@ -39,6 +45,10 @@ export interface GenerateOptions {
 export interface GenerateResult {
     text: string;
     functionCalls: Array<{ name: string; args: Record<string, unknown> }>;
+    /// Modelning javobi TEGILMAGAN holda — suhbat tarixiga aynan shu qo'shiladi.
+    /// Qayta yig'ilsa thoughtSignature yo'qoladi va Gemini 3 keyingi
+    /// chaqiruvni rad etadi: "Function call is missing a thought_signature".
+    modelContent: Content | null;
     raw: any;
 }
 
@@ -96,7 +106,12 @@ export async function generate(contents: Content[], opts: GenerateOptions = {}):
         throw new GeminiError('Javob xavfsizlik filtri tomonidan bloklandi.');
     }
 
-    return { text, functionCalls, raw: json };
+    return {
+        text,
+        functionCalls,
+        modelContent: candidate?.content ? ({ ...candidate.content, role: 'model' } as Content) : null,
+        raw: json,
+    };
 }
 
 /// Ovozli xabarni matnga aylantirish (Gemini audioni to'g'ridan-to'g'ri tushunadi).

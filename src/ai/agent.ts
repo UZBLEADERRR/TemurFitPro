@@ -140,10 +140,15 @@ export async function ask(input: AskInput): Promise<AskResult> {
                 return { reply, transcript, toolsUsed };
             }
 
-            contents.push({
-                role: 'model',
-                parts: res.functionCalls.map(fc => ({ functionCall: { name: fc.name, args: fc.args } })),
-            });
+            // Model javobini AYNAN o'zidek qaytaramiz. Gemini 3 functionCall
+            // qismlariga thoughtSignature qo'yadi va uni talab qiladi — qayta
+            // yig'ilsa "Function call is missing a thought_signature" xatosi chiqadi.
+            contents.push(
+                res.modelContent ?? {
+                    role: 'model',
+                    parts: res.functionCalls.map(fc => ({ functionCall: { name: fc.name, args: fc.args } })),
+                },
+            );
 
             const responses = [];
             for (const call of res.functionCalls) {
