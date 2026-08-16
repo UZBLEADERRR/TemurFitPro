@@ -1,18 +1,29 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, type GroupInfo, type MemberBrief } from '../lib/api';
 import { Avatar, Card, Empty, Loading } from './bits';
 import { haptic } from '../lib/telegram';
 
-export default function Members({ onPick }: { onPick: (id: string) => void }) {
+export default function Members({
+    group,
+    onPick,
+    children,
+}: {
+    group: string | null;
+    onPick: (id: string) => void;
+    children?: ReactNode;
+}) {
     const [rows, setRows] = useState<MemberBrief[] | null>(null);
     const [groups, setGroups] = useState<GroupInfo[]>([]);
     const [q, setQ] = useState('');
     const [error, setError] = useState('');
 
     useEffect(() => {
-        api.members().then(setRows).catch((e: Error) => setError(e.message));
+        setRows(null);
+        api.members(group ?? undefined)
+            .then(setRows)
+            .catch((e: Error) => setError(e.message));
         api.groups().then(setGroups).catch(() => undefined);
-    }, []);
+    }, [group]);
 
     const filtered = useMemo(() => {
         if (!rows) return null;
@@ -34,6 +45,8 @@ export default function Members({ onPick }: { onPick: (id: string) => void }) {
                 </div>
             </div>
 
+            {children}
+
             {error && <div className="err">{error}</div>}
 
             <input
@@ -50,19 +63,6 @@ export default function Members({ onPick }: { onPick: (id: string) => void }) {
                     marginBottom: 12,
                 }}
             />
-
-            {groups.length > 1 && (
-                <Card title="Guruhlar" tight>
-                    {groups.map(g => (
-                        <div key={g.id} className="row">
-                            <div className="grow">
-                                <div className="name">{g.title}</div>
-                            </div>
-                            <span className="pill">{g.members}</span>
-                        </div>
-                    ))}
-                </Card>
-            )}
 
             {!filtered ? (
                 <Loading />

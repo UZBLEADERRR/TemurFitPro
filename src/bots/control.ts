@@ -9,10 +9,14 @@ import { log } from '../core/logger';
 import { esc, chunkText, tgError } from '../core/telegram';
 import {
     createTenant, deleteTenant, pauseTenant, resumeTenant, purgeTenantData, purgeOlderThan,
-    addGroup, isSuperAdmin, audit, TenantError, PurgeScope,
+    purgeGroupData, addGroup, approveGroup, rejectGroup, pendingGroups,
+    isSuperAdmin, audit, TenantError, PurgeScope,
 } from '../core/tenants';
+import { LIVE_GROUP, statusBadge } from '../core/groups';
 import { getEntry, webhookUrl, tenantSpec, reconcileTenantWebhooks } from '../core/registry';
 import { getState } from '../core/webhooks';
+import { ask, aiAvailable, aiOffReason } from '../ai/agent';
+import { downloadFile } from '../core/telegram';
 import { getControlState, setControlState, clearControlState } from './session';
 import { formatIn, safeTz, daysAgoIn } from '../core/time';
 import { getStats, formatStats, findInactive, formatInactive } from '../features/filters';
@@ -42,8 +46,11 @@ controlBot.use(async (ctx, next) => {
 });
 
 // ---------- Menyular ----------
-function mainMenu() {
+function mainMenu(pending = 0) {
     return Markup.inlineKeyboard([
+        ...(pending > 0
+            ? [[Markup.button.callback(`⏳ Tasdiq kutayotgan guruhlar (${pending})`, 's:pending')]]
+            : []),
         [Markup.button.callback("➕ Yangi bot qo'shish", 's:addbot')],
         [Markup.button.callback('🤖 Botlar', 's:bots'), Markup.button.callback('📊 Umumiy holat', 's:overview')],
         [Markup.button.callback('👑 Super adminlar', 's:admins')],
@@ -51,6 +58,9 @@ function mainMenu() {
             Markup.button.callback('💾 Disk', 's:disk'),
             Markup.button.callback('🔌 Webhook', 's:hooks'),
         ],
+        ...(env.AI_ENABLED && env.GEMINI_API_KEY
+            ? [[Markup.button.callback('🧠 AI bilan boshqarish', 's:ai')]]
+            : []),
     ]);
 }
 
@@ -101,11 +111,11 @@ controlBot.start(async ctx => {
             '',
             `Sizning ID: <code>${ctx.from.id}</code>`,
         ].join('\n'),
-        mainMenu(),
+        await mainMenuWithPending(),
     );
 });
 
-controlBot.command('menu', async ctx => reply(ctx, '👑 <b>Boshqaruv markazi</b>', mainMenu()));
+controlBot.command('menu', async ctx => showMain(ctx));
 
 controlBot.command('addbot', async ctx => {
     const arg = ctx.message.text.split(/\s+/)[1];
@@ -128,7 +138,7 @@ controlBot.on('callback_query', async ctx => {
     try {
         switch (action) {
             case 'menu':
-                return reply(ctx, '👑 <b>Boshqaruv markazi</b>', mainMenu());
+                return showMain(ctx);
 
             case 'addbot':
                 await setControlState(String(ctx.chat!.id), 'await:token');
@@ -148,6 +158,78 @@ controlBot.on('callback_query', async ctx => {
 
             case 'hooks':
                 return showWebhooks(ctx);
+
+            case 'pending':
+                return showPending(ctx);
+
+            case 'ai': {
+                const tenants = await prisma.tenant.findMany({ where: { status: 'active' }, orderBy: { createdAt: 'asc' } });
+                if (!tenants.length) return reply(ctx, "Avval bot qo'shing.", back('s:menu'));
+                const rows = tenants.map(t => [Markup.button.callback(`@${t.botUsername}`, `s:aisel:${t.id}`)]);
+                rows.push([Markup.button.callback('⬅️ Menyu', 's:menu')]);
+                return reply(
+                    ctx,
+                    "🧠 <b>Qaysi botni boshqaramiz?</b>\n\nTanlang, keyin oddiy tilda buyruq bering yoki ovozli xabar yuboring.",
+                    Markup.inlineKeyboard(rows),
+                );
+            }
+
+            case 'aisel': {
+                await setControlState(String(ctx.chat!.id), 'ai', { tenantId: id });
+                const t = await prisma.tenant.findUnique({ where: { id } });
+                return reply(
+                    ctx,
+                    [
+                        `🧠 <b>AI rejimi: @${esc(t?.botUsername ?? '')}</b>`,
+                        '',
+                        'Endi yozgan yoki aytgan gapingiz AI ga boradi. Masalan:',
+                        '• <i>"3 kunda ovqat yubormaganlarni top va ogohlantirish yubor"</i>',
+                        '• <i>"tasdiq kutayotgan guruhlar bormi"</i>',
+                        '• <i>"Bekning kechki eslatmasini o\'chir"</i>',
+                        '',
+                        'Chiqish uchun /menu bosing.',
+                    ].join('\n'),
+                    back('s:menu', '⬅️ Chiqish'),
+                );
+            }
+
+            case 'gok': {
+                const t = await prisma.tenant.findUnique({ where: { id: id } });
+                if (!t) return reply(ctx, 'Bot topilmadi.');
+                const g = await approveGroup(t, extra, String(ctx.from.id));
+                await reply(ctx, `✅ <b>${esc(g.title || g.chatId)}</b> tasdiqlandi — guruh ishga tushdi.`);
+                await announceApproved(t, g.chatId);
+                return showPending(ctx);
+            }
+
+            case 'gno': {
+                const t = await prisma.tenant.findUnique({ where: { id: id } });
+                if (!t) return reply(ctx, 'Bot topilmadi.');
+                const g = await rejectGroup(t, extra, String(ctx.from.id));
+                await reply(ctx, `❌ <b>${esc(g.title || g.chatId)}</b> rad etildi — guruhda hech narsa qayd etilmaydi.`);
+                return showPending(ctx);
+            }
+
+            case 'gview': {
+                return showGroup(ctx, id, extra);
+            }
+
+            case 'gpurge':
+                return reply(
+                    ctx,
+                    "⚠️ <b>Tasdiqlang</b>\n\nShu guruhning ovqat tarixi, eslatmalari va FAQAT shu guruhdagi a'zolari o'chiriladi. Boshqa guruhda ham turganlar saqlanadi.",
+                    Markup.inlineKeyboard([
+                        [Markup.button.callback('✅ Ha, tozala', `s:gpurgeok:${id}:${extra}`)],
+                        [Markup.button.callback('❌ Bekor', `s:gview:${id}:${extra}`)],
+                    ]),
+                );
+
+            case 'gpurgeok': {
+                const t = await prisma.tenant.findUnique({ where: { id: id } });
+                if (!t) return;
+                const summary = await purgeGroupData(t, extra, String(ctx.from.id));
+                return reply(ctx, `🧹 Tozalandi: ${esc(summary)}`, back(`s:groups:${id}`));
+            }
 
             case 'fixhooks': {
                 const { reconcileControlWebhook } = await import('../index');
@@ -196,10 +278,7 @@ controlBot.on('callback_query', async ctx => {
 
             case 'rmgroup': {
                 const t = await prisma.tenant.findUnique({ where: { id } });
-                if (t) {
-                    const db = await tenantDb(t.botId);
-                    await db.group.update({ where: { id: extra }, data: { isActive: false } });
-                }
+                if (t) await rejectGroup(t, extra, String(ctx.from.id));
                 return showGroups(ctx, id);
             }
 
@@ -235,7 +314,7 @@ controlBot.on('callback_query', async ctx => {
                 if (!t) return;
                 const db = await tenantDb(t.botId);
                 const rows = await findInactive(db, t, { days: 2 });
-                const groups = await db.group.count({ where: { isActive: true } });
+                const groups = await db.group.count({ where: LIVE_GROUP });
                 return reply(ctx, formatInactive(rows, 2, groups), back(`s:bot:${id}`));
             }
 
@@ -305,6 +384,35 @@ controlBot.on('callback_query', async ctx => {
     }
 });
 
+// ---------- Ovozli buyruq ----------
+controlBot.on(['voice', 'audio'], async ctx => {
+    const session = await getControlState(String(ctx.chat.id));
+    if (session.state !== 'ai') {
+        return reply(ctx, "🎙 Ovozli buyruq uchun avval <b>🧠 AI bilan boshqarish</b> dan botni tanlang.", await mainMenuWithPending());
+    }
+    const tenant = await prisma.tenant.findUnique({ where: { id: String(session.payload.tenantId) } });
+    if (!tenant) return showMain(ctx);
+    if (!aiAvailable(tenant)) return reply(ctx, aiOffReason(tenant));
+
+    const file = (ctx.message as any).voice ?? (ctx.message as any).audio;
+    if (!file) return;
+    await ctx.sendChatAction('typing').catch(() => undefined);
+    try {
+        const buffer = await downloadFile(controlBot, file.file_id);
+        const res = await ask({
+            tenant,
+            actorTgId: String(ctx.from.id),
+            actorName: ctx.from.first_name || 'Admin',
+            role: 'super',
+            audio: { buffer, mimeType: file.mime_type || 'audio/ogg' },
+        });
+        await reply(ctx, (res.transcript ? `🎙 <i>${esc(res.transcript)}</i>\n\n` : '') + res.reply);
+    } catch (e) {
+        log.error('control-bot', 'ovoz xatosi', e);
+        await reply(ctx, "🎙 Ovozni qayta ishlab bo'lmadi.");
+    }
+});
+
 // ---------- Matn ----------
 controlBot.on('text', async ctx => {
     const text = ctx.message.text.trim();
@@ -335,7 +443,7 @@ controlBot.on('text', async ctx => {
             const tenantId = String(session.payload.tenantId);
             await clearControlState(chatId);
             const t = await prisma.tenant.findUnique({ where: { id: tenantId } });
-            if (!t) return reply(ctx, 'Bot topilmadi.', mainMenu());
+            if (!t) return showMain(ctx);
             try {
                 const res = await addGroup(t, text);
                 await reply(ctx, res.created ? "✅ Guruh qo'shildi." : "ℹ️ Bu guruh allaqachon ro'yxatda.");
@@ -349,7 +457,7 @@ controlBot.on('text', async ctx => {
             const tenantId = String(session.payload.tenantId);
             await clearControlState(chatId);
             const t = await prisma.tenant.findUnique({ where: { id: tenantId } });
-            if (!t) return reply(ctx, 'Bot topilmadi.', mainMenu());
+            if (!t) return showMain(ctx);
             const db = await tenantDb(t.botId);
             const digits = text.replace(/\D/g, '');
             const member =
@@ -365,8 +473,23 @@ controlBot.on('text', async ctx => {
             return showCoaches(ctx, tenantId);
         }
 
+        case 'ai': {
+            const tenant = await prisma.tenant.findUnique({ where: { id: String(session.payload.tenantId) } });
+            if (!tenant) return showMain(ctx);
+            if (!aiAvailable(tenant)) return reply(ctx, aiOffReason(tenant), await mainMenuWithPending());
+            await ctx.sendChatAction('typing').catch(() => undefined);
+            const res = await ask({
+                tenant,
+                actorTgId: String(ctx.from.id),
+                actorName: ctx.from.first_name || 'Admin',
+                role: 'super',
+                text,
+            });
+            return reply(ctx, res.reply);
+        }
+
         default:
-            return reply(ctx, 'Menyudan tanlang 👇', mainMenu());
+            return showMain(ctx, 'Menyudan tanlang 👇');
     }
 });
 
@@ -430,7 +553,7 @@ async function showTenant(ctx: Context, tenantId: string) {
 
     const db = await tenantDb(t.botId);
     const [groups, members, coaches, meals, pending] = await Promise.all([
-        db.group.count({ where: { isActive: true } }),
+        db.group.count({ where: LIVE_GROUP }),
         db.member.count({ where: { status: 'active' } }),
         db.member.count({ where: { role: { in: ['coach', 'owner'] } } }),
         db.mealRecord.count(),
@@ -460,15 +583,19 @@ async function showGroups(ctx: Context, tenantId: string) {
     const t = await prisma.tenant.findUnique({ where: { id: tenantId } });
     if (!t) return;
     const db = await tenantDb(t.botId);
-    const groups = await db.group.findMany({ where: { isActive: true }, orderBy: { createdAt: 'asc' } });
+    const groups = await db.group.findMany({
+        where: { status: { not: 'rejected' } },
+        orderBy: [{ status: 'asc' }, { createdAt: 'asc' }],
+    });
 
     const rows = await Promise.all(
         groups.map(async g => {
             const n = await db.groupMember.count({ where: { groupId: g.id } });
+            const mark = !g.isActive ? '🚪' : g.status === 'approved' ? '🏠' : '⏳';
             return [
                 Markup.button.callback(
-                    `🗑 ${(g.title || g.chatId).slice(0, 26)} (${n})`,
-                    `s:rmgroup:${tenantId}:${g.id}`,
+                    `${mark} ${(g.title || g.chatId).slice(0, 24)} (${n})`,
+                    `s:gview:${tenantId}:${g.id}`,
                 ),
             ];
         }),
@@ -476,11 +603,20 @@ async function showGroups(ctx: Context, tenantId: string) {
     rows.push([Markup.button.callback("➕ Guruh qo'shish", `s:addgroup:${tenantId}`)]);
     rows.push([Markup.button.callback('⬅️ Orqaga', `s:bot:${tenantId}`)]);
 
+    const waiting = groups.filter(g => g.isActive && g.status === 'pending').length;
+
     return reply(
         ctx,
         groups.length
-            ? `🏠 <b>Guruhlar (${groups.length})</b>\n\n<i>Nomga bosilsa ro'yxatdan chiqariladi (ma'lumot saqlanadi).</i>`
-            : "🏠 Hali guruh yo'q.\n\n<i>Botni guruhga qo'shsangiz avtomatik ro'yxatga olinadi.</i>",
+            ? [
+                  `🏠 <b>Guruhlar (${groups.length})</b>`,
+                  waiting ? `⏳ ${waiting} tasi tasdiq kutmoqda` : '',
+                  '',
+                  '🏠 faol · ⏳ tasdiq kutmoqda · 🚪 bot chiqarilgan',
+              ]
+                  .filter(Boolean)
+                  .join('\n')
+            : "🏠 Hali guruh yo'q.\n\n<i>Botni guruhga qo'shsangiz bu yerda tasdiq so'raladi.</i>",
         Markup.inlineKeyboard(rows),
     );
 }
@@ -524,7 +660,7 @@ async function showOverview(ctx: Context) {
 
     for (const t of tenants) {
         const db = await tenantDb(t.botId);
-        groups += await db.group.count({ where: { isActive: true } });
+        groups += await db.group.count({ where: LIVE_GROUP });
         members += await db.member.count({ where: { status: 'active' } });
         meals += await db.mealRecord.count();
         today += await db.mealRecord.count({ where: { timeSent: { gte: since } } });
@@ -543,7 +679,7 @@ async function showOverview(ctx: Context) {
             '',
             `💾 Baza: <b>fayl</b> (${esc(DATA_DIR)})`,
             `🌐 PUBLIC_URL: ${env.PUBLIC_URL ? '✅' : '❌ sozlanmagan'}`,
-            `🧠 AI: ${env.AI_ENABLED ? '✅ yoqilgan' : "⏸ o'chirilgan"}`,
+            `🧠 AI: ${!env.AI_ENABLED ? "⏸ o'chirilgan" : env.GEMINI_API_KEY ? `✅ ${env.GEMINI_MODEL}` : '❌ GEMINI_API_KEY yo\'q'}`,
         ].join('\n'),
         back('s:menu'),
     );
@@ -626,6 +762,102 @@ function describe(state: Awaited<ReturnType<typeof getState>>): string {
     const pending = state.pending > 0 ? ` · ${state.pending} kutayotgan` : '';
     const err = state.lastError ? `\n   ↳ oxirgi xato: <i>${esc(state.lastError)}</i>` : '';
     return `✅ ishlayapti${pending}${err}`;
+}
+
+async function showMain(ctx: Context, title = '👑 <b>Boshqaruv markazi</b>') {
+    return reply(ctx, title, await mainMenuWithPending());
+}
+
+async function mainMenuWithPending() {
+    const pending = await pendingGroups().catch(() => []);
+    return mainMenu(pending.length);
+}
+
+/// Tasdiq kutayotgan guruhlar — barcha botlar bo'ylab
+async function showPending(ctx: Context) {
+    const rows = await pendingGroups();
+    if (rows.length === 0) {
+        return reply(ctx, "✅ Tasdiq kutayotgan guruh yo'q.", back('s:menu'));
+    }
+
+    const first = rows[0];
+    const lines = [
+        `⏳ <b>Tasdiq kutmoqda: ${rows.length}</b>`,
+        '',
+        `🤖 Bot: @${esc(first.tenant.botUsername)}`,
+        `🏠 Guruh: <b>${esc(first.group.title || '(nomsiz)')}</b>`,
+        `🆔 <code>${first.group.chatId}</code>`,
+        `📅 ${formatIn(first.group.createdAt, safeTz(first.tenant.timezone), 'dd.MM.yyyy HH:mm')}`,
+    ];
+    if (rows.length > 1) lines.push('', `<i>Bu birinchisi — qolgan ${rows.length - 1} tasi navbatda.</i>`);
+
+    return reply(
+        ctx,
+        lines.join('\n'),
+        Markup.inlineKeyboard([
+            [
+                Markup.button.callback('✅ Tasdiqlash', `s:gok:${first.tenant.id}:${first.group.id}`),
+                Markup.button.callback('❌ Rad etish', `s:gno:${first.tenant.id}:${first.group.id}`),
+            ],
+            [Markup.button.callback('⬅️ Menyu', 's:menu')],
+        ]),
+    );
+}
+
+/// Tasdiqlangач guruhga xabar berish
+async function announceApproved(tenant: Tenant, chatId: string) {
+    const entry = getEntry(tenant.botId);
+    if (!entry) return;
+    await entry.bot.telegram
+        .sendMessage(
+            chatId,
+            [
+                '✅ <b>Bot ishga tushdi!</b>',
+                '',
+                'Ovqat rasmini hashtag bilan yuboring:',
+                '<code>#nonushta</code> · <code>#tushlik</code> · <code>#kechki</code>',
+                '',
+                'Botni <b>admin</b> qiling — shunda jadvalni pinlay oladi va eslatmalarni tozalaydi.',
+            ].join('\n'),
+            { parse_mode: 'HTML' },
+        )
+        .catch(e => log.warn('control-bot', `guruhga xabar yetmadi: ${tgError(e)}`));
+}
+
+/// Bitta guruh — super admin uchun to'liq boshqaruv
+async function showGroup(ctx: Context, tenantId: string, groupId: string) {
+    const t = await prisma.tenant.findUnique({ where: { id: tenantId } });
+    if (!t) return;
+    const db = await tenantDb(t.botId);
+    const g = await db.group.findUnique({ where: { id: groupId } });
+    if (!g) return showGroups(ctx, tenantId);
+
+    const [people, meals] = await Promise.all([
+        db.groupMember.count({ where: { groupId: g.id } }),
+        db.mealRecord.count({ where: { groupId: g.id } }),
+    ]);
+
+    const actions: any[][] = [];
+    if (g.status !== 'approved') {
+        actions.push([Markup.button.callback('✅ Tasdiqlash', `s:gok:${tenantId}:${g.id}`)]);
+    } else {
+        actions.push([Markup.button.callback('⛔️ Faoliyatini to\'xtatish', `s:gno:${tenantId}:${g.id}`)]);
+    }
+    actions.push([Markup.button.callback("🧹 Ma'lumotlarini tozalash", `s:gpurge:${tenantId}:${g.id}`)]);
+    actions.push([Markup.button.callback('⬅️ Guruhlar', `s:groups:${tenantId}`)]);
+
+    return reply(
+        ctx,
+        [
+            `🏠 <b>${esc(g.title || g.chatId)}</b>`,
+            `<code>${g.chatId}</code>`,
+            statusBadge(g),
+            '',
+            `👥 A'zolar: <b>${people}</b>`,
+            `🍽 Ovqat qaydlari: <b>${meals}</b>`,
+        ].join('\n'),
+        Markup.inlineKeyboard(actions),
+    );
 }
 
 async function showAdmins(ctx: Context) {

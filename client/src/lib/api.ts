@@ -50,6 +50,11 @@ export const api = {
     saveSettings: (body: Partial<Settings>) =>
         request<{ ok: boolean }>('/settings', { method: 'POST', body: JSON.stringify(body) }),
     business: () => request<BusinessInfo>('/business'),
+    setReminder: (memberId: string, mealType: MealKey, muted: boolean) =>
+        request<{ ok: boolean }>('/reminder-override', {
+            method: 'POST',
+            body: JSON.stringify({ memberId, mealType, muted }),
+        }),
 };
 
 // ===== Tiplar =====
@@ -74,6 +79,9 @@ export interface BoardMember {
     name: string;
     role: string;
     timezone: string;
+    /// Murabbiyga beriladi — profilga o'tish uchun
+    telegramId?: string;
+    username?: string | null;
     groups: { id: string; title: string }[];
     meals: Record<MealKey, MealStatus>;
 }
@@ -118,6 +126,8 @@ export interface MemberBrief {
 export interface InactiveRow {
     id: string;
     name: string;
+    telegramId: string;
+    username: string | null;
     lastMealDate: string | null;
     daysSince: number | null;
     groups: string[];
@@ -131,7 +141,9 @@ export interface MissingRow {
 }
 
 export interface MemberDetail {
-    member: { id: string; name: string; timezone: string; role: string };
+    /// Har bir ovqat uchun eslatma YOQILGANmi (true = keladi)
+    reminders: Record<MealKey, boolean>;
+    member: { id: string; name: string; timezone: string; role: string; telegramId?: string; username?: string | null };
     days: { date: string; meals: { meal: MealKey; status: string; at: string | null }[] }[];
     total: number;
     expected: number;

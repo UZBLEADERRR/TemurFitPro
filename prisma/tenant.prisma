@@ -23,10 +23,21 @@ datasource db {
 }
 
 model Group {
-  id              String   @id @default(cuid())
-  chatId          String   @unique
-  title           String   @default("")
-  isActive        Boolean  @default(true)
+  id     String @id @default(cuid())
+  chatId String @unique
+  title  String @default("")
+
+  /// Bot hozir guruh ichidami (chiqarib yuborilsa false)
+  isActive Boolean @default(true)
+
+  /// Super admin qarori: pending | approved | rejected
+  /// Bot guruhga qo'shilganda "pending" bo'ladi va TASDIQLANGUNCHA
+  /// hech narsa qayd etilmaydi. Guruhlarni faqat super admin qabul qiladi.
+  status     String    @default("pending")
+  approvedAt DateTime?
+  /// Kim tasdiqlagani (telegram id) — audit uchun
+  approvedBy String?
+
   pinnedMessageId Int?
   lastTableDate   String?
   createdAt       DateTime @default(now())
@@ -35,7 +46,7 @@ model Group {
   mealRecords MealRecord[]
   mentions    Mention[]
 
-  @@index([isActive])
+  @@index([isActive, status])
 }
 
 model Member {

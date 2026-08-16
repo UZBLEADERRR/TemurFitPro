@@ -4,6 +4,9 @@ CREATE TABLE "Group" (
     "chatId" TEXT NOT NULL,
     "title" TEXT NOT NULL DEFAULT '',
     "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "status" TEXT NOT NULL DEFAULT 'pending',
+    "approvedAt" DATETIME,
+    "approvedBy" TEXT,
     "pinnedMessageId" INTEGER,
     "lastTableDate" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -131,7 +134,7 @@ CREATE TABLE "AiMessage" (
 CREATE UNIQUE INDEX "Group_chatId_key" ON "Group"("chatId");
 
 -- CreateIndex
-CREATE INDEX "Group_isActive_idx" ON "Group"("isActive");
+CREATE INDEX "Group_isActive_status_idx" ON "Group"("isActive", "status");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "Member_telegramId_key" ON "Member"("telegramId");

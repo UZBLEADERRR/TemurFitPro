@@ -12,3 +12,6 @@ data/
 *.db-journal
 *.db-wal
 *.db-shm
+
+# TypeScript inkremental build keshi — commit qilinmaydi
+*.tsbuildinfo

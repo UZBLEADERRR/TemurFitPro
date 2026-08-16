@@ -20,6 +20,7 @@ interface TgWebApp {
     };
     setHeaderColor?(color: string): void;
     setBackgroundColor?(color: string): void;
+    openTelegramLink?(url: string): void;
 }
 
 declare global {
@@ -51,6 +52,25 @@ export function initTelegram(): void {
     };
     for (const [key, val] of Object.entries(map)) {
         if (val) document.documentElement.style.setProperty(key, val);
+    }
+}
+
+/// Odamning Telegram profilini ochish.
+/// username bo'lsa t.me havolasi ishlatiladi — bu eng ishonchli yo'l.
+/// Bo'lmasa tg://user?id= sxemasi (Telegram ichida ishlaydi, brauzerda yo'q).
+export function openProfile(user: { telegramId?: string | null; username?: string | null }): void {
+    const app = tg();
+    haptic();
+
+    if (user.username) {
+        const url = `https://t.me/${user.username.replace(/^@/, '')}`;
+        if (app?.openTelegramLink) app.openTelegramLink(url);
+        else window.open(url, '_blank');
+        return;
+    }
+
+    if (user.telegramId) {
+        window.location.href = `tg://user?id=${user.telegramId}`;
     }
 }
 

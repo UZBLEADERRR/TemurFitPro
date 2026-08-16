@@ -11,6 +11,7 @@ import { MEAL_TYPES, MEAL_LABELS, MealType, mealTargetMinutes, mealWindowEnd } f
 import { todayIn, localMinutes, safeTz } from './core/time';
 import { updateGroupTable, createAndPinTable } from './features/table';
 import { processOutbox } from './features/outbox';
+import { LIVE_GROUP } from './core/groups';
 import { reconcileTenantWebhooks } from './core/registry';
 
 let ticking = false;
@@ -91,7 +92,7 @@ async function runReminders(): Promise<void> {
         if (!getBotByTenant(tenant.id) || tenant.maxReminders === 0) continue;
 
         const db = await tenantDb(tenant.botId);
-        const groups = await db.group.findMany({ where: { isActive: true } });
+        const groups = await db.group.findMany({ where: LIVE_GROUP });
 
         for (const group of groups) {
             const links = await db.groupMember.findMany({
@@ -210,7 +211,7 @@ async function runDailyTables(): Promise<void> {
 
         const today = todayIn(tz);
         const db = await tenantDb(tenant.botId);
-        const groups = await db.group.findMany({ where: { isActive: true } });
+        const groups = await db.group.findMany({ where: LIVE_GROUP });
 
         for (const group of groups) {
             if (group.lastTableDate === today) continue;
@@ -231,7 +232,7 @@ export async function refreshAllTables(): Promise<number> {
     let n = 0;
     for (const t of tenants) {
         const db = await tenantDb(t.botId);
-        for (const g of await db.group.findMany({ where: { isActive: true } })) {
+        for (const g of await db.group.findMany({ where: LIVE_GROUP })) {
             await updateGroupTable(db, t, g).catch(() => undefined);
             n++;
         }
