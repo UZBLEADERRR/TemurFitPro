@@ -1,5 +1,5 @@
 import { Markup } from 'telegraf';
-import { webappUrl } from '../core/env';
+import { webappUrl } from '../core/settings';
 
 /// Barcha menyular inline tugmalarda — foydalanuvchi buyruq yodlamaydi.
 

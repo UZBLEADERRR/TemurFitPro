@@ -5,7 +5,7 @@ import { generate, transcribeAudio, GeminiError, Content } from './gemini';
 import { declarationsFor, runTool, ToolContext } from './tools';
 import { systemPrompt } from './prompt';
 import { decrypt } from '../core/crypto';
-import { env } from '../core/env';
+import { settings } from '../core/settings';
 import { log } from '../core/logger';
 import type { Role } from '../core/roles';
 
@@ -35,18 +35,18 @@ function apiKeyFor(tenant: Tenant): string {
             /* buzilgan kalit — global kalitga tushamiz */
         }
     }
-    return env.GEMINI_API_KEY;
+    return settings().geminiApiKey;
 }
 
 /// AI shu bot uchun ishlaydimi. Kalit bo'lmasa yoki o'chirilgan bo'lsa — yo'q.
 export function aiAvailable(tenant: Tenant): boolean {
-    return env.AI_ENABLED && !!apiKeyFor(tenant);
+    return settings().aiEnabled && !!apiKeyFor(tenant);
 }
 
 /// AI nega ishlamayotganini foydalanuvchiga tushuntirish
 export function aiOffReason(tenant: Tenant): string {
-    if (!env.AI_ENABLED) return "🤖 AI o'chirilgan (AI_ENABLED=false).";
-    if (!apiKeyFor(tenant)) return "🤖 AI sozlanmagan — GEMINI_API_KEY qo'shilishi kerak.";
+    if (!settings().aiEnabled) return "🤖 AI o'chirilgan — ona bot → 🔑 Kalitlar → ⚡ AI dan yoqing.";
+    if (!apiKeyFor(tenant)) return "🤖 AI sozlanmagan — ona bot → 🔑 Kalitlar → 🧠 Gemini kalitini qo'ying.";
     return '';
 }
 
@@ -97,7 +97,7 @@ export async function clearHistory(tenant: Tenant, actorTgId: string): Promise<n
 export async function ask(input: AskInput): Promise<AskResult> {
     const { tenant, actorTgId, actorName, role } = input;
     const apiKey = apiKeyFor(tenant);
-    if (!env.AI_ENABLED || !apiKey) return { reply: aiOffReason(tenant), toolsUsed: [] };
+    if (!settings().aiEnabled || !apiKey) return { reply: aiOffReason(tenant), toolsUsed: [] };
 
     let userText = (input.text ?? '').trim();
     let transcript: string | undefined;

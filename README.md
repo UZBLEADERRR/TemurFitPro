@@ -21,6 +21,7 @@ platformaga aylandi.
 | O'chirish | Qo'lda SQL | Tugma: guruh / tur / eski sana / butun bot |
 | Murabbiy | Faqat rol belgisi | To'liq panel, barcha guruhlar bo'ylab saralash |
 | Mini ilova | Bitta ekran, auth yo'q | 4 ekran, initData HMAC imzosi |
+| Sozlash | 6 ta env o'zgaruvchisi | Railway'da 2 ta, qolgani bot ichida |
 
 ---
 
@@ -31,6 +32,7 @@ SQLite fayllarda:
 
 ```
 /data
+├── secrets.json           shifrlash kaliti + webhook siri (bir marta yaratiladi)
 ├── platform.db            botlar ro'yxati + super adminlar (kichik)
 └── tenants/
     ├── 7891234567.db      1-bot: guruhlari, a'zolari, butun tarixi
@@ -93,19 +95,56 @@ mijozlar unga kirmaydi.
 Repozitoriyni ulang, so'ng:
 
 **Volume qo'shing** — Service → Settings → Volumes → Add Volume, mount path `/data`.
-Busiz ma'lumotlar har deploy'da yo'qoladi.
+Busiz ma'lumotlar ham, shifrlash kaliti ham har deploy'da yo'qoladi va
+saqlangan bot tokenlari ochilmay qoladi. Bot buni sezsa loglarda qizil
+ogohlantirish beradi.
 
-Env o'zgaruvchilari (`.env.example` ga qarang):
+Env o'zgaruvchilari — **faqat ikkitasi**:
 
 ```
-CONTROL_BOT_TOKEN=...
-SUPER_ADMIN_IDS=<sizning telegram id>
-ENCRYPTION_KEY=<openssl rand -base64 32>
-PUBLIC_URL=https://<loyiha>.up.railway.app
+CONTROL_BOT_TOKEN=...      # @BotFather dan
+GEMINI_API_KEY=...         # ixtiyoriy, bot ichidan ham qo'yiladi
 ```
+
+Boshqa hech narsa yozilmaydi. Qolgani o'zi hal bo'ladi:
+
+| Nima | Qanday hal bo'ladi |
+|---|---|
+| `ENCRYPTION_KEY` | Volume ichidagi `secrets.json` da bir marta o'zi yaratiladi |
+| `CONTROL_WEBHOOK_SECRET` | Xuddi shunday, tasodifiy |
+| `SUPER_ADMIN_IDS` | Botga **birinchi `/start`** bosgan odam ega bo'ladi |
+| `PUBLIC_URL` | `RAILWAY_PUBLIC_DOMAIN` dan; topilmasa 🔑 Kalitlar → 🌐 dan |
+| `DATA_DIR` | `RAILWAY_VOLUME_MOUNT_PATH` dan |
+| `GEMINI_MODEL`, `AI_ENABLED` | 🔑 Kalitlar panelidan |
 
 Platforma bazasi startda avtomatik yaratiladi; har bir bot fayli esa bot
 qo'shilgan payt paydo bo'ladi.
+
+### Egalik qanday olinadi
+
+Birinchi deploydan keyin ona botga `/start` bosing — **siz platforma egasi
+bo'lasiz** va shu zahoti bu yo'l yopiladi: boshqa hech kim shu tarzda kira
+olmaydi. Keyingi adminlar 👑 **Super adminlar** dan qo'shiladi.
+
+> Deploy bilan `/start` orasidagi qisqa oraliqda botni birinchi topgan odam
+> egalikni olib qo'yishi nazariy jihatdan mumkin. Buni butunlay yopish uchun
+> Railway'ga `SUPER_ADMIN_IDS=<telegram id>` qo'shing — u turgan bo'lsa
+> avtomatik egalik umuman ishlamaydi.
+
+### 🔑 Kalitlar paneli
+
+Ona bot → **🔑 Kalitlar**. Bu yerda:
+
+- **🧠 Gemini kaliti** — qo'yish / almashtirish / o'chirish.
+  Bazada shifrlangan holda yotadi, yuborgan xabaringiz darhol o'chiriladi.
+  Bot ichidagi kalit Railway env'dagisidan **ustun** turadi; o'chirsangiz
+  env'dagisiga qaytadi.
+- **🤖 Model** — masalan `gemini-3-flash-preview`
+- **⚡ AI** — yoqish/o'chirish
+- **🌐 Public URL** — Railway domeni topilmasa qo'lda kiritiladi;
+  saqlangach webhooklar avtomatik yangi manzilga ko'chadi
+
+Panelda shifrlash kaliti qayerdan kelgani va nechta admin borligi ham ko'rinadi.
 
 ### 3. Birinchi mijoz boti
 
@@ -255,10 +294,11 @@ ma'lumotiga o'ta olmaydi.
 
 ---
 
-## AI (hozircha o'chirilgan)
+## AI
 
-AI yordamchi **ishlatilmayapti** (`AI_ENABLED=false`). Bot to'liq tugmalar va
-buyruqlar bilan boshqariladi.
+Gemini kaliti bo'lsa AI yordamchi yoqiladi — Railway env'dan ham, ona bot →
+🔑 Kalitlar → 🧠 dan ham qo'yish mumkin. Kalit bo'lmasa bot AI'siz **to'liq**
+ishlayveradi: hamma narsa tugmalar va buyruqlarda bor.
 
 Kelajakda qaytarish uchun asos qoldirilgan: `src/ai/gemini.ts` — Gemini REST
 klienti (matn + audio, function calling'ni qo'llaydi). Tool qatlami olib
@@ -281,6 +321,7 @@ lekin Telegram'dan update kelmaydi. Sinash uchun ngrok/cloudflared ishlating.
 
 ```bash
 npm run typecheck    # backend
+npm run test         # kalitlar + xabar yetkazish testlari
 npm run build        # generate + typecheck + mini ilova
 npm run sql:tenant   # sxema o'zgarsa tenant DDL faylini yangilash
 ```
@@ -308,6 +349,8 @@ src/
     registry.ts           Tenant bot reyestri (Telegraf × N)
     tenants.ts            Bot qo'shish/o'chirish, guruh va tozalash amallari
     crypto.ts             AES-256-GCM token shifrlash
+    secrets.ts            Shifrlash kaliti va webhook siri (o'zi yaratiladi)
+    settings.ts           Bot ichidan qo'yiladigan sozlamalar (Gemini, URL)
     time.ts               Per-user timezone hisoblari
     meals.ts              Ovqat turlari va aniqlash
     roles.ts              Rol yordamchilari
@@ -331,7 +374,8 @@ client/                   React + Vite mini ilova
 
 ## Xavfsizlik
 
-- Bot tokenlari bazada AES-256-GCM bilan shifrlangan
+- Shifrlash kaliti Volume ichida `secrets.json` da, huquqlari `0600`
+- Bot tokenlari va Gemini kaliti bazada AES-256-GCM bilan shifrlangan
 - Har bir webhook o'z tasodifiy siri bilan (URL + `X-Telegram-Bot-Api-Secret-Token`)
 - Mini ilova so'rovlari HMAC imzo bilan, doimiy vaqtli taqqoslash orqali
 - Har bir bot o'z faylida — so'rov boshqa botning ma'lumotiga yeta olmaydi

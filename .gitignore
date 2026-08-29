@@ -15,3 +15,6 @@ data/
 
 # TypeScript inkremental build keshi — commit qilinmaydi
 *.tsbuildinfo
+
+# Avtomatik yaratiladigan kalitlar fayli — hech qachon commit qilinmaydi
+secrets.json

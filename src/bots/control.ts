@@ -18,6 +18,11 @@ import { getState } from '../core/webhooks';
 import { ask, aiAvailable, aiOffReason } from '../ai/agent';
 import { downloadFile } from '../core/telegram';
 import { getControlState, setControlState, clearControlState } from './session';
+import {
+    settings, setGeminiKey, clearGeminiKey, setGeminiModel, setAiEnabled, setPublicUrl,
+    maskKey, publicUrl,
+} from '../core/settings';
+import { encryptionKeySource, secretsFilePath } from '../core/secrets';
 import { formatIn, safeTz, daysAgoIn } from '../core/time';
 import { getStats, formatStats, findInactive, formatInactive } from '../features/filters';
 
@@ -34,7 +39,12 @@ controlBot.catch((err, ctx) => {
 controlBot.use(async (ctx, next) => {
     if (!ctx.from) return;
     if (ctx.chat?.type !== 'private') return;
+
     if (!(await isSuperAdmin(String(ctx.from.id)))) {
+        // Hali egasi yo'q bo'lsa — birinchi yozgan odam egasi bo'ladi.
+        // Shu tufayli Railway'ga SUPER_ADMIN_IDS yozish shart emas.
+        if (await claimOwnership(ctx)) return next();
+
         await ctx
             .reply(`⛔️ Bu bot faqat platforma adminlari uchun.\n\nSizning ID: <code>${ctx.from.id}</code>`, {
                 parse_mode: 'HTML',
@@ -44,6 +54,47 @@ controlBot.use(async (ctx, next) => {
     }
     return next();
 });
+
+/// Platformaning birinchi egasini belgilash.
+///
+/// Faqat bazada BITTA HAM super admin bo'lmaganda ishlaydi — ya'ni eng birinchi
+/// deploydan keyingi birinchi /start. Shundan keyin bu yo'l butunlay yopiladi.
+/// Env'da SUPER_ADMIN_IDS turgan bo'lsa umuman ishlamaydi.
+async function claimOwnership(ctx: Context): Promise<boolean> {
+    if (env.SUPER_ADMIN_IDS.length) return false;
+    if ((await prisma.superAdmin.count()) > 0) return false;
+
+    const tgId = String(ctx.from!.id);
+    const name = [ctx.from!.first_name, ctx.from!.last_name].filter(Boolean).join(' ') || tgId;
+
+    try {
+        await prisma.superAdmin.create({ data: { telegramId: tgId, name } });
+    } catch {
+        // Ikki kishi bir vaqtda yozsa — telegramId unique, biri yutqazadi.
+        return isSuperAdmin(tgId);
+    }
+
+    await audit(null, tgId, 'admin.claim', name);
+    log.warn('control-bot', `platforma egasi belgilandi: ${name} (${tgId}) — birinchi /start orqali`);
+
+    await ctx
+        .reply(
+            [
+                "👑 <b>Siz platforma egasi bo'ldingiz.</b>",
+                '',
+                "Bot hali egasiz edi — birinchi yozgan odam ega bo'ladi.",
+                "Endi bu yo'l yopildi: boshqa hech kim shu tarzda kira olmaydi.",
+                '',
+                `Sizning ID: <code>${tgId}</code>`,
+                '',
+                "<i>Yana admin qo'shish: 👑 Super adminlar.</i>",
+            ].join('\n'),
+            { parse_mode: 'HTML' },
+        )
+        .catch(() => undefined);
+
+    return true;
+}
 
 // ---------- Menyular ----------
 function mainMenu(pending = 0) {
@@ -58,7 +109,8 @@ function mainMenu(pending = 0) {
             Markup.button.callback('💾 Disk', 's:disk'),
             Markup.button.callback('🔌 Webhook', 's:hooks'),
         ],
-        ...(env.AI_ENABLED && env.GEMINI_API_KEY
+        [Markup.button.callback('🔑 Kalitlar', 's:keys')],
+        ...(settings().aiEnabled && settings().geminiApiKey
             ? [[Markup.button.callback('🧠 AI bilan boshqarish', 's:ai')]]
             : []),
     ]);
@@ -241,6 +293,62 @@ controlBot.on('callback_query', async ctx => {
                 );
                 return showWebhooks(ctx);
             }
+
+            case 'keys':
+                return showKeys(ctx);
+
+            case 'setgemini':
+                await setControlState(String(ctx.chat!.id), 'await:geminiKey');
+                return reply(
+                    ctx,
+                    [
+                        '🧠 <b>Gemini kalitini yuboring</b>',
+                        '',
+                        'Olish: https://aistudio.google.com/apikey (bepul limit bor)',
+                        '',
+                        "<i>Kalit bazada shifrlangan holda saqlanadi va xabaringiz darhol o'chiriladi.</i>",
+                    ].join('\n'),
+                    back('s:keys'),
+                );
+
+            case 'delgemini':
+                await clearGeminiKey();
+                await audit(null, String(ctx.from.id), 'settings.gemini.clear');
+                return showKeys(ctx);
+
+            case 'setmodel':
+                await setControlState(String(ctx.chat!.id), 'await:geminiModel');
+                return reply(
+                    ctx,
+                    [
+                        '🤖 <b>Model nomini yuboring</b>',
+                        '',
+                        `Hozirgi: <code>${esc(settings().geminiModel)}</code>`,
+                        '',
+                        '<i>Masalan: gemini-3-flash-preview</i>',
+                    ].join('\n'),
+                    back('s:keys'),
+                );
+
+            case 'aitoggle':
+                await setAiEnabled(!settings().aiEnabled);
+                await audit(null, String(ctx.from.id), 'settings.ai', settings().aiEnabled ? 'on' : 'off');
+                return showKeys(ctx);
+
+            case 'setpublic':
+                await setControlState(String(ctx.chat!.id), 'await:publicUrl');
+                return reply(
+                    ctx,
+                    [
+                        '🌐 <b>Public URL yuboring</b>',
+                        '',
+                        `Hozirgi: <code>${esc(publicUrl() || "yo'q")}</code>`,
+                        '',
+                        '<i>Namuna: https://temurfitpro-production.up.railway.app</i>',
+                        "<i>Bo'shatish uchun \"-\" yuboring — Railway domeni avtomatik olinadi.</i>",
+                    ].join('\n'),
+                    back('s:keys'),
+                );
 
             case 'admins':
                 return showAdmins(ctx);
@@ -473,6 +581,45 @@ controlBot.on('text', async ctx => {
             return showCoaches(ctx, tenantId);
         }
 
+        case 'await:geminiKey': {
+            await clearControlState(chatId);
+            // Kalit chatda qolib ketmasin
+            await ctx.deleteMessage().catch(() => undefined);
+            if (text.length < 20) return reply(ctx, "❌ Bu kalitga o'xshamadi.", back('s:keys'));
+            await setGeminiKey(text);
+            await audit(null, String(ctx.from.id), 'settings.gemini.set');
+            await reply(ctx, "✅ Gemini kaliti saqlandi (xabaringiz o'chirildi).");
+            return showKeys(ctx);
+        }
+
+        case 'await:geminiModel': {
+            await clearControlState(chatId);
+            if (!/^[a-z0-9.\-]{3,60}$/i.test(text)) return reply(ctx, '❌ Model nomi xato.', back('s:keys'));
+            await setGeminiModel(text);
+            await audit(null, String(ctx.from.id), 'settings.model', text);
+            return showKeys(ctx);
+        }
+
+        case 'await:publicUrl': {
+            await clearControlState(chatId);
+            if (text === '-') {
+                await setPublicUrl('');
+                await audit(null, String(ctx.from.id), 'settings.publicUrl.clear');
+                return showKeys(ctx);
+            }
+            if (!/^https:\/\/[^\s/]+/.test(text)) {
+                return reply(ctx, '❌ https:// bilan boshlanishi kerak.', back('s:keys'));
+            }
+            await setPublicUrl(text);
+            await audit(null, String(ctx.from.id), 'settings.publicUrl', text);
+            // Yangi manzilga webhooklarni ko'chiramiz
+            const { reconcileControlWebhook } = await import('../index');
+            await reconcileControlWebhook().catch(() => undefined);
+            await reconcileTenantWebhooks().catch(() => undefined);
+            await reply(ctx, "✅ Public URL saqlandi, webhooklar yangi manzilga ko'chirildi.");
+            return showKeys(ctx);
+        }
+
         case 'ai': {
             const tenant = await prisma.tenant.findUnique({ where: { id: String(session.payload.tenantId) } });
             if (!tenant) return showMain(ctx);
@@ -498,9 +645,9 @@ controlBot.on('text', async ctx => {
 async function doAddBot(ctx: Context, token: string) {
     try {
         const tenant = await createTenant(token, String(ctx.from!.id));
-        const hookNote = env.PUBLIC_URL
+        const hookNote = publicUrl()
             ? `Webhook: <code>${esc(webhookUrl(tenant))}</code>`
-            : "⚠️ <b>PUBLIC_URL sozlanmagan</b> — webhook o'rnatilmadi.";
+            : "⚠️ <b>Public URL topilmadi</b> — webhook o'rnatilmadi (🔑 Kalitlar → 🌐).";
         await reply(
             ctx,
             [
@@ -678,8 +825,8 @@ async function showOverview(ctx: Context) {
             `📈 Oxirgi 24 soatda: <b>${today}</b>`,
             '',
             `💾 Baza: <b>fayl</b> (${esc(DATA_DIR)})`,
-            `🌐 PUBLIC_URL: ${env.PUBLIC_URL ? '✅' : '❌ sozlanmagan'}`,
-            `🧠 AI: ${!env.AI_ENABLED ? "⏸ o'chirilgan" : env.GEMINI_API_KEY ? `✅ ${env.GEMINI_MODEL}` : '❌ GEMINI_API_KEY yo\'q'}`,
+            `🌐 Public URL: ${publicUrl() ? '✅' : '❌ topilmadi'}`,
+            `🧠 AI: ${!settings().aiEnabled ? "⏸ o'chirilgan" : settings().geminiApiKey ? `✅ ${settings().geminiModel}` : "❌ kalit yo'q"}`,
         ].join('\n'),
         back('s:menu'),
     );
@@ -718,11 +865,11 @@ async function showDisk(ctx: Context) {
 /// Webhook holati — Telegram botga xabar yubora olyaptimi yo'qmi, shu yerda ko'rinadi.
 /// Bot "jim" bo'lib qolsa birinchi navbatda shu yerga qaraladi.
 async function showWebhooks(ctx: Context) {
-    if (!env.PUBLIC_URL) {
+    if (!publicUrl()) {
         return reply(
             ctx,
-            "⚠️ <b>PUBLIC_URL sozlanmagan</b>\n\nWebhooklar o'rnatilmaydi va botlar hech qanday xabar olmaydi.\nRailway → Variables → PUBLIC_URL qo'shing.",
-            back('s:menu'),
+            "⚠️ <b>Public URL topilmadi</b>\n\nWebhooklar o'rnatilmaydi va botlar hech qanday xabar olmaydi.\n\nRailway → Settings → Networking → <b>Generate Domain</b> bosing (keyin qayta deploy),\nyoki 🔑 Kalitlar → 🌐 Public URL dan qo'lda kiriting.",
+            Markup.inlineKeyboard([[Markup.button.callback('🌐 Public URL kiritish', 's:setpublic')], [Markup.button.callback('⬅️ Orqaga', 's:menu')]]),
         );
     }
 
@@ -860,6 +1007,65 @@ async function showGroup(ctx: Context, tenantId: string, groupId: string) {
     );
 }
 
+/// 🔑 Kalitlar — Railway'da env o'zgaruvchisi kovlab o'tirmaslik uchun.
+/// Bu yerdan hamma narsani bot ichidan qo'yish mumkin.
+async function showKeys(ctx: Context) {
+    const st = settings();
+    const src = encryptionKeySource();
+    const admins = await prisma.superAdmin.count();
+
+    const encLine =
+        src === 'env'
+            ? "✅ env'dan olindi va faylga ko'chirildi"
+            : src === 'yangi'
+              ? '🆕 endi yaratildi'
+              : "✅ faylda (o'zgarmaydi)";
+
+    const geminiLine = st.geminiApiKey
+        ? `✅ <code>${esc(maskKey(st.geminiApiKey))}</code> · ${st.geminiKeyFromBot ? 'bot ichidan' : "Railway env'dan"}`
+        : "❌ yo'q";
+
+    const urlLine = publicUrl()
+        ? `✅ <code>${esc(publicUrl())}</code> · ${st.publicUrlFromBot ? "qo'lda" : 'avtomatik'}`
+        : '❌ topilmadi';
+
+    const rows = [
+        [Markup.button.callback(st.geminiApiKey ? '🧠 Gemini kalitini almashtirish' : "🧠 Gemini kalitini qo'yish", 's:setgemini')],
+        ...(st.geminiKeyFromBot ? [[Markup.button.callback("🗑 Gemini kalitini o'chirish", 's:delgemini')]] : []),
+        [
+            Markup.button.callback('🤖 Model', 's:setmodel'),
+            Markup.button.callback(st.aiEnabled ? "⚡ AI: yoqilgan" : '⚡ AI: o\'chirilgan', 's:aitoggle'),
+        ],
+        [Markup.button.callback('🌐 Public URL', 's:setpublic')],
+        [Markup.button.callback('⬅️ Menyu', 's:menu')],
+    ];
+
+    return reply(
+        ctx,
+        [
+            '🔑 <b>Kalitlar va sozlamalar</b>',
+            '',
+            '<b>Railway env</b> — faqat ikkitasi kerak:',
+            '• <code>CONTROL_BOT_TOKEN</code> ✅ (ishlab turibdi)',
+            `• <code>GEMINI_API_KEY</code> ${st.geminiApiKey && !st.geminiKeyFromBot ? '✅' : '— shart emas, quyidan qo\'ying'}`,
+            '',
+            '<b>O\'zi sozlanadiganlar</b>',
+            `🔐 Shifrlash kaliti: ${encLine}`,
+            `🔌 Webhook siri: ✅ avtomatik`,
+            `👑 Adminlar: ${admins} ta · ${env.SUPER_ADMIN_IDS.length ? "env'da belgilangan" : 'birinchi /start orqali olingan'}`,
+            '',
+            '<b>Bu yerdan o\'zgartiriladi</b>',
+            `🧠 Gemini kaliti: ${geminiLine}`,
+            `🤖 Model: <code>${esc(st.geminiModel)}</code>`,
+            `⚡ AI: ${st.aiEnabled ? 'yoqilgan' : "o'chirilgan"}`,
+            `🌐 Public URL: ${urlLine}`,
+            '',
+            `<i>Maxfiy qiymatlar shifrlangan. Kalit fayli: <code>${esc(secretsFilePath())}</code></i>`,
+        ].join('\n'),
+        Markup.inlineKeyboard(rows),
+    );
+}
+
 async function showAdmins(ctx: Context) {
     const admins = await prisma.superAdmin.findMany({ orderBy: { createdAt: 'asc' } });
     const me = String(ctx.from!.id);
@@ -918,5 +1124,7 @@ export async function seedSuperAdmins(): Promise<void> {
     }
     const count = await prisma.superAdmin.count();
     log.info('control-bot', `${count} ta super admin`);
-    if (count === 0) log.warn('control-bot', "SUPER_ADMIN_IDS bo'sh — ona botga hech kim kira olmaydi!");
+    if (count === 0) {
+        log.info('control-bot', "hali egasi yo'q — ona botga birinchi /start bosgan odam ega bo'ladi");
+    }
 }

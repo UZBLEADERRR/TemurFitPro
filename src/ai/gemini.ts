@@ -1,4 +1,4 @@
-import { env } from '../core/env';
+import { settings } from '../core/settings';
 import { log } from '../core/logger';
 
 // Gemini 3 Flash Preview — generativelanguage REST API.
@@ -55,14 +55,14 @@ export interface GenerateResult {
 export class GeminiError extends Error {}
 
 export function hasGemini(tenantKey?: string | null): boolean {
-    return !!(tenantKey || env.GEMINI_API_KEY);
+    return !!(tenantKey || settings().geminiApiKey);
 }
 
 export async function generate(contents: Content[], opts: GenerateOptions = {}): Promise<GenerateResult> {
-    const apiKey = opts.apiKey || env.GEMINI_API_KEY;
+    const apiKey = opts.apiKey || settings().geminiApiKey;
     if (!apiKey) throw new GeminiError('GEMINI_API_KEY sozlanmagan');
 
-    const model = opts.model || env.GEMINI_MODEL;
+    const model = opts.model || settings().geminiModel;
     const body: Record<string, unknown> = {
         contents,
         generationConfig: {

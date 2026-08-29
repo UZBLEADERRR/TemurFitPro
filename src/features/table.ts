@@ -6,7 +6,7 @@ import { getBotByTenant } from '../core/registry';
 import { MEAL_TYPES, MealType } from '../core/meals';
 import { todayIn, safeTz } from '../core/time';
 import { tgError, withRetry, esc } from '../core/telegram';
-import { webappUrl } from '../core/env';
+import { webappUrl } from '../core/settings';
 import { log } from '../core/logger';
 import { LIVE_GROUP } from '../core/groups';
 

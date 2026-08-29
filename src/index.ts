@@ -11,6 +11,8 @@ import { setWebhook, reconcile, CONTROL_UPDATES, type WebhookSpec } from './core
 import { startScheduler } from './scheduler';
 import { tgError } from './core/telegram';
 import { DATA_DIR } from './core/paths';
+import { encryptionKeyIsNew, secretsFilePath } from './core/secrets';
+import { loadSettings, publicUrl } from './core/settings';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -23,7 +25,8 @@ app.get('/health', (_req, res) => {
 });
 
 // ====== ONA BOT WEBHOOK ======
-const CONTROL_SECRET = process.env.CONTROL_WEBHOOK_SECRET || 'control';
+// Sir Volume ichidagi secrets.json da o'zi yaratiladi — env'da yozish shart emas.
+const CONTROL_SECRET = env.CONTROL_WEBHOOK_SECRET;
 const CONTROL_PATH = `/tg/control/${CONTROL_SECRET}`;
 app.use(controlBot.webhookCallback(CONTROL_PATH, { secretToken: CONTROL_SECRET }));
 
@@ -55,7 +58,7 @@ app.post('/tg/:botId/:secret', express.json(), async (req, res) => {
 export function controlSpec(): WebhookSpec {
     return {
         label: 'ona bot',
-        url: `${env.PUBLIC_URL}${CONTROL_PATH}`,
+        url: `${publicUrl()}${CONTROL_PATH}`,
         secret: CONTROL_SECRET,
         allowedUpdates: CONTROL_UPDATES,
     };
@@ -63,7 +66,7 @@ export function controlSpec(): WebhookSpec {
 
 /// Ona bot webhookini tekshirib, kerak bo'lsa tiklash (scheduler chaqiradi)
 export async function reconcileControlWebhook(): Promise<boolean> {
-    if (!env.PUBLIC_URL) return false;
+    if (!publicUrl()) return false;
     return reconcile(controlBot, controlSpec());
 }
 
@@ -94,10 +97,16 @@ async function bootstrap(): Promise<void> {
         process.exit(1);
     }
 
+    // Bot ichidan qo'yilgan sozlamalar (Gemini kaliti, model, PUBLIC_URL)
+    await loadSettings();
     await seedSuperAdmins();
+    await warnIfVolumeMissing();
 
-    if (!env.PUBLIC_URL) {
-        log.warn('server', "PUBLIC_URL sozlanmagan — webhooklar o'rnatilmaydi. Railway'da qo'shing.");
+    if (!publicUrl()) {
+        log.warn(
+            'server',
+            "PUBLIC_URL topilmadi — webhooklar o'rnatilmaydi. Railway domenini yoqing yoki ona bot → 🔑 Kalitlar → 🌐 dan qo'ying.",
+        );
     } else {
         // Webhook o'rnatishni KUTMAYMIZ: Telegram sekin javob bersa (504 odatiy hol)
         // butun startni 2 daqiqaga to'xtatib qo'yardi. Fonda qayta urinadi, va
@@ -111,6 +120,29 @@ async function bootstrap(): Promise<void> {
     startScheduler();
 
     log.info('server', '🚀 TemurFitPro tayyor');
+}
+
+/// Volume ulanmagan bo'lsa shifrlash kaliti har deployda yangidan yaratiladi va
+/// saqlangan bot tokenlari ochilmay qoladi. Sukut saqlab yiqilgandan ko'ra
+/// sababini aniq aytgan ma'qul.
+async function warnIfVolumeMissing(): Promise<void> {
+    if (!encryptionKeyIsNew()) return;
+
+    const tenants = await prisma.tenant.count().catch(() => 0);
+    if (tenants === 0) {
+        log.info('secrets', `shifrlash kaliti yaratildi: ${secretsFilePath()}`);
+        return;
+    }
+
+    log.error(
+        'secrets',
+        [
+            `DIQQAT: shifrlash kaliti YANGIDAN yaratildi, lekin bazada ${tenants} ta bot bor.`,
+            `Bu odatda Volume ulanmaganini bildiradi (${DATA_DIR} har deployda tozalanmoqda).`,
+            'Railway → Service → Settings → Volumes → mount path /data qiling.',
+            "Aks holda mijoz bot tokenlari ochilmaydi va ularni qaytadan qo'shishga to'g'ri keladi.",
+        ].join(' '),
+    );
 }
 
 // ====== GRACEFUL SHUTDOWN ======

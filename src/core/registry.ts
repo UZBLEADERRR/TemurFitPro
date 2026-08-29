@@ -2,7 +2,7 @@ import { Telegraf } from 'telegraf';
 import type { Tenant } from '../generated/platform';
 import { prisma, tenantDb } from './db';
 import { decrypt } from './crypto';
-import { env } from './env';
+import { publicUrl } from './settings';
 import { log } from './logger';
 import { tgError } from './telegram';
 import { setWebhook, reconcile, getState, TENANT_UPDATES, type WebhookSpec } from './webhooks';
@@ -45,7 +45,7 @@ export function webhookPath(tenant: { botId: string; webhookSecret: string }): s
 }
 
 export function webhookUrl(tenant: { botId: string; webhookSecret: string }): string {
-    return `${env.PUBLIC_URL}${webhookPath(tenant)}`;
+    return `${publicUrl()}${webhookPath(tenant)}`;
 }
 
 /// Tenant botini xotiraga yuklash va Telegram'da webhook o'rnatish.
@@ -71,7 +71,7 @@ export async function registerTenant(tenant: Tenant, withWebhook = true): Promis
         bot,
     });
 
-    if (withWebhook && env.PUBLIC_URL) {
+    if (withWebhook && publicUrl()) {
         await setWebhook(bot, tenantSpec(tenant));
     }
 }
@@ -89,7 +89,7 @@ export function tenantSpec(tenant: { botId: string; botUsername: string; webhook
 /// Barcha tenant botlarining webhookini tekshirib, kerak bo'lsa tiklaydi.
 /// Telegram bir marta javob bermay qolsa, bot butunlay kar bo'lib qolmasin.
 export async function reconcileTenantWebhooks(): Promise<{ checked: number; fixed: number }> {
-    if (!env.PUBLIC_URL) return { checked: 0, fixed: 0 };
+    if (!publicUrl()) return { checked: 0, fixed: 0 };
     let checked = 0;
     let fixed = 0;
 

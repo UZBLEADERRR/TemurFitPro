@@ -70,6 +70,15 @@ model ControlSession {
   updatedAt DateTime @updatedAt
 }
 
+/// Ona bot ichidan o'zgartiriladigan sozlamalar (Gemini kaliti, model, PUBLIC_URL).
+/// Railway'da env o'zgaruvchisi yozib o'tirmaslik uchun. Maxfiy qiymatlar
+/// shifrlangan holda yotadi — src/core/settings.ts ga qarang.
+model PlatformSetting {
+  key       String   @id
+  value     String   @default("")
+  updatedAt DateTime @updatedAt
+}
+
 model AuditLog {
   id        String   @id @default(cuid())
   tenantId  String?

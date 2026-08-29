@@ -1,10 +1,10 @@
 import crypto from 'crypto';
-import { env } from './env';
+import { encryptionKey } from './secrets';
 
 // Bot tokenlari bazada ochiq turmasligi kerak — baza sizib chiqsa, barcha
 // mijoz botlari o'g'irlanadi. AES-256-GCM: shifr + autentifikatsiya tegi.
 
-const KEY = crypto.createHash('sha256').update(env.ENCRYPTION_KEY).digest();
+const KEY = crypto.createHash('sha256').update(encryptionKey()).digest();
 
 export function encrypt(plain: string): string {
     const iv = crypto.randomBytes(12);
