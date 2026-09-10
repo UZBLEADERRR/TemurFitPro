@@ -5,10 +5,11 @@ import { tenantDb } from '../core/db';
 import { getBotByTenant } from '../core/registry';
 import { MEAL_TYPES, MealType } from '../core/meals';
 import { todayIn, safeTz } from '../core/time';
-import { tgError, withRetry, esc } from '../core/telegram';
+import { tgError, withRetry, esc, safeText, truncate, padVisual, visualLength, isChatGone } from '../core/telegram';
 import { webappUrl } from '../core/settings';
 import { log } from '../core/logger';
 import { LIVE_GROUP } from '../core/groups';
+import { markGroupLeft } from '../core/tenants';
 
 const MARK_DONE = '🟢';
 const MARK_LATE = '🟡';
@@ -51,25 +52,30 @@ export async function renderTable(db: TenantClient, tenant: Tenant, group: Group
     const header = [`<b>💪 ${esc(group.title || 'Ratsion jadvali')}</b>`, `📅 ${dateStr}`, ''];
 
     if (rows.length === 0) {
-        return [...header, "Hali a'zolar yo'q. Guruhga ovqat rasmini hashtag bilan yuboring."].join('\n');
+        return safeText([...header, "Hali a'zolar yo'q. Guruhga ovqat rasmini hashtag bilan yuboring."].join('\n'));
     }
 
-    const width = Math.min(14, Math.max(...rows.map(r => r.name.length)));
+    // DIQQAT: uzunlik kod NUQTALARI bo'yicha o'lchanadi, kod birliklari bo'yicha emas.
+    // Aks holda ismdagi emoji surrogat juftligining o'rtasidan kesilib, Telegram
+    // butun xabarni "text must be encoded in UTF-8" deb rad etadi.
+    const width = Math.min(14, Math.max(...rows.map(r => visualLength(r.name))));
     const body = rows.map((r, i) => {
-        const name = esc(r.name.slice(0, width).padEnd(width));
+        const name = esc(padVisual(truncate(r.name, width), width));
         return `<code>${String(i + 1).padStart(2)}. ${name}</code> ${r.marks.nonushta}${r.marks.tushlik}${r.marks.kechki}`;
     });
 
     const done = rows.filter(r => MEAL_TYPES.every(m => r.marks[m] !== MARK_MISS)).length;
 
-    return [
-        ...header,
-        `<code>     ${''.padEnd(width)} N T K</code>`,
-        ...body,
-        '',
-        `${MARK_DONE} vaqtida · ${MARK_LATE} kech · ${MARK_MISS} yo'q`,
-        `✅ To'liq bajardi: <b>${done}/${rows.length}</b>`,
-    ].join('\n');
+    return safeText(
+        [
+            ...header,
+            `<code>     ${' '.repeat(width)} N T K</code>`,
+            ...body,
+            '',
+            `${MARK_DONE} vaqtida · ${MARK_LATE} kech · ${MARK_MISS} yo'q`,
+            `✅ To'liq bajardi: <b>${done}/${rows.length}</b>`,
+        ].join('\n'),
+    );
 }
 
 function keyboard(tenantId: string) {
@@ -96,6 +102,7 @@ export async function updateGroupTable(db: TenantClient, tenant: Tenant, group: 
         } catch (e) {
             const desc = tgError(e);
             if (desc.includes('message is not modified')) return;
+            if (await handleChatGone(e, tenant, group)) return;
             if (!desc.includes('message to edit not found') && !desc.includes("message can't be edited")) {
                 log.warn('table', `jadval yangilanmadi (${group.chatId}): ${desc}`);
                 return;
@@ -131,8 +138,19 @@ export async function createAndPinTable(
             data: { pinnedMessageId: msg.message_id, lastTableDate: todayIn(safeTz(tenant.timezone)) },
         });
     } catch (e) {
+        if (await handleChatGone(e, tenant, group)) return;
         log.error('table', `jadval yuborilmadi (${group.chatId}): ${tgError(e)}`);
     }
+}
+
+/// Bot guruhdan chiqarilgan/guruh o'chirilgan bo'lsa — uni "faol emas" deb
+/// belgilaymiz. Busiz scheduler har kuni o'sha "chat not found" ni qayta-qayta
+/// yozib, loglarni to'ldirib yuboradi va haqiqiy xatolar ko'rinmay qoladi.
+async function handleChatGone(e: unknown, tenant: Tenant, group: Group): Promise<boolean> {
+    if (!isChatGone(e)) return false;
+    await markGroupLeft(tenant, group.chatId).catch(() => undefined);
+    log.warn('table', `guruh yetib bo'lmaydi, faol emas deb belgilandi (${group.chatId}): ${tgError(e)}`);
+    return true;
 }
 
 /// Bitta a'zo ovqat yuborgach — u a'zo bo'lgan barcha guruhlar jadvalini yangilash

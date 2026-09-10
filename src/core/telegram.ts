@@ -54,13 +54,81 @@ export async function withRetry<T>(fn: () => Promise<T>, retries = 3, baseDelayM
     }
 }
 
+/// Bot bu chatga umuman yeta olmaydi — qayta urinishning ma'nosi yo'q.
+/// Bunday guruhni "chiqarilgan" deb belgilab qo'yish kerak, aks holda
+/// scheduler har kuni o'sha xatoni qayta-qayta yozaveradi.
+const CHAT_GONE_PATTERNS = [
+    'chat not found',
+    'bot was kicked',
+    'bot is not a member',
+    'user is deactivated',
+    'chat_write_forbidden',
+    'not enough rights to send text messages',
+    'the group chat was deleted',
+    'group chat was upgraded to a supergroup',
+    'peer_id_invalid',
+    'forbidden: bot was blocked by the user',
+];
+
+export function isChatGone(e: any): boolean {
+    const text = String(tgError(e)).toLowerCase();
+    return CHAT_GONE_PATTERNS.some(p => text.includes(p));
+}
+
 export function sleep(ms: number): Promise<void> {
     return new Promise(r => setTimeout(r, ms));
 }
 
-/// Telegram HTML parse_mode uchun xavfsizlash
+// ============ MATNNI XAVFSIZLASH ============
+//
+// Telegram "Bad Request: text must be encoded in UTF-8" deb rad etadigan
+// yagona amaliy sabab — matnda YOLG'IZ SURROGAT qolishi.
+//
+// JavaScript satrlari UTF-16 da. Emoji (😀, 🔥) ikkita kod birligidan iborat
+// "surrogat juftlik". `name.slice(0, 14)` xuddi shu juftlikning o'rtasidan
+// kessa, satrda yolg'iz yuqori surrogat (\uD83D) qoladi — bu yaroqsiz UTF-8
+// va Telegram BUTUN xabarni rad etadi.
+//
+// Amalda bu shunday ko'rinadi: bitta a'zoning ismida emoji bo'lsa, o'sha
+// guruhning jadvali BUTUNLAY ishlamay qoladi, boshqa guruhlar esa ishlayveradi.
+
+/// Juftini yo'qotgan surrogatlarni olib tashlash.
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+/// Telegramga ketadigan har qanday matn shu yerdan o'tadi.
+/// Yolg'iz surrogatlar va xabarni buzadigan boshqaruv belgilari olib tashlanadi.
+export function safeText(s: string): string {
+    return s
+        .replace(LONE_SURROGATE, '')
+        // Ko'rinmas boshqaruv belgilari (tab, LF, CR dan tashqari)
+        .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+}
+
+/// Satrni surrogat juftlikni BUZMASDAN qisqartirish.
+/// `Array.from` UTF-16 kod birliklari bo'yicha emas, kod nuqtalari bo'yicha
+/// yuradi — shuning uchun emoji hech qachon o'rtasidan kesilmaydi.
+export function truncate(s: string, maxChars: number): string {
+    const chars = Array.from(s);
+    if (chars.length <= maxChars) return s;
+    return chars.slice(0, maxChars).join('');
+}
+
+/// Ko'rinadigan uzunlik bo'yicha to'ldirish. `padEnd` kod birliklarini
+/// sanaydi, shuning uchun emojili ism ustunni buzardi.
+export function padVisual(s: string, width: number): string {
+    const len = Array.from(s).length;
+    return len >= width ? s : s + ' '.repeat(width - len);
+}
+
+export function visualLength(s: string): number {
+    return Array.from(s).length;
+}
+
+/// Telegram HTML parse_mode uchun xavfsizlash.
+/// Foydalanuvchi kiritgan har bir satr shu yerdan o'tadi — shuning uchun
+/// yolg'iz surrogatlarni ham shu yerda tozalaymiz.
 export function esc(s: string): string {
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return safeText(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 /// Foydalanuvchini HTML mention qilish
@@ -69,7 +137,9 @@ export function mention(telegramId: string, name: string): string {
 }
 
 /// Telegram xabar chegarasi (4096) bo'yicha bo'lish
-export function chunkText(text: string, limit = 3800): string[] {
+export function chunkText(input: string, limit = 3800): string[] {
+    // esc() dan o'tmagan yo'llar uchun oxirgi himoya
+    const text = safeText(input);
     if (text.length <= limit) return [text];
     const out: string[] = [];
     let buf = '';
