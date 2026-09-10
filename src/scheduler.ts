@@ -13,6 +13,8 @@ import { updateGroupTable, createAndPinTable } from './features/table';
 import { processOutbox } from './features/outbox';
 import { LIVE_GROUP } from './core/groups';
 import { reconcileTenantWebhooks } from './core/registry';
+import { sendBackupToAdmins } from './features/backup';
+import { settings } from './core/settings';
 
 let ticking = false;
 
@@ -59,6 +61,17 @@ export function startScheduler(): void {
         }
     });
 
+    // ===== Har soat: kunlik zaxirani super adminlarga yuborish =====
+    // Ma'lumot yo'qolsa (bot guruhdan chiqarilsa, tozalash noto'g'ri bosilsa,
+    // Volume ulanmay qolsa) — super admin oxirgi faylni botga qaytarib tashlaydi.
+    cron.schedule('5 * * * *', async () => {
+        try {
+            await runDailyBackups();
+        } catch (e) {
+            log.error('scheduler', 'zaxira xatosi', e);
+        }
+    });
+
     // ===== Har kuni 03:00 UTC: eski yozuvlarni tozalash =====
     cron.schedule('0 3 * * *', async () => {
         try {
@@ -81,6 +94,34 @@ export function startScheduler(): void {
     });
 
     log.info('scheduler', 'ishga tushdi');
+}
+
+// ============ KUNLIK ZAXIRA ============
+
+/// Oxirgi zaxira qaysi kunda yuborilgani (jarayon xotirasida).
+/// Railway restart qilsa ko'pi bilan bitta ortiqcha fayl ketadi — zarari yo'q.
+const lastBackupDate = new Map<string, string>();
+
+async function runDailyBackups(): Promise<void> {
+    const cfg = settings();
+    if (!cfg.backupEnabled) return;
+
+    const now = new Date();
+    if (now.getUTCHours() !== cfg.backupHour) return;
+
+    const today = now.toISOString().slice(0, 10);
+    const tenants = await prisma.tenant.findMany({ where: { status: 'active' } });
+
+    for (const tenant of tenants) {
+        if (lastBackupDate.get(tenant.botId) === today) continue;
+        try {
+            const sent = await sendBackupToAdmins(tenant);
+            lastBackupDate.set(tenant.botId, today);
+            log.info('scheduler', `zaxira yuborildi: @${tenant.botUsername} → ${sent} admin`);
+        } catch (e) {
+            log.error('scheduler', `zaxira tayyorlanmadi (${tenant.botId})`, e);
+        }
+    }
 }
 
 // ============ ESLATMALAR ============

@@ -56,23 +56,41 @@ function brief(m: MemberWithGroups): MemberBrief {
 
 const withGroups = { groups: { include: { group: true } } } as const;
 
-function groupScope(groupId?: string | null) {
-    return groupId ? { groups: { some: { groupId } } } : {};
+/// A'zolarni guruh bo'yicha cheklash.
+///
+/// groupId  — murabbiy bitta guruhni tanlagan
+/// allowed  — murabbiyning umuman ko'ra oladigan guruhlari (null = hammasi).
+///            Guruh murabbiysi boshqa guruhning a'zolarini ko'rmasligi uchun
+///            bu cheklov HAR BIR so'rovda qo'llanadi.
+function groupScope(groupId?: string | null, allowed?: string[] | null) {
+    if (groupId) return { groups: { some: { groupId } } };
+    if (allowed) return { groups: { some: { groupId: { in: allowed } } } };
+    return {};
 }
 
-export async function listGroups(db: TenantClient) {
-    return db.group.findMany({ where: LIVE_GROUP, orderBy: { createdAt: 'asc' } });
+/// Barcha saralash funksiyalari uchun umumiy parametrlar
+export interface ScopeOpts {
+    groupId?: string | null;
+    /// null = cheklov yo'q. Massiv = faqat shu guruhlar.
+    allowedGroupIds?: string[] | null;
+}
+
+export async function listGroups(db: TenantClient, allowedGroupIds?: string[] | null) {
+    return db.group.findMany({
+        where: { ...LIVE_GROUP, ...(allowedGroupIds ? { id: { in: allowedGroupIds } } : {}) },
+        orderBy: { createdAt: 'asc' },
+    });
 }
 
 export async function listMembers(
     db: TenantClient,
-    opts: { groupId?: string | null; role?: string; status?: string } = {},
+    opts: ScopeOpts & { role?: string; status?: string } = {},
 ): Promise<MemberBrief[]> {
     const members = await db.member.findMany({
         where: {
             ...(opts.role ? { role: opts.role } : {}),
             status: opts.status ?? 'active',
-            ...groupScope(opts.groupId),
+            ...groupScope(opts.groupId, opts.allowedGroupIds),
         },
         include: withGroups,
         orderBy: { joinedAt: 'asc' },
@@ -85,13 +103,13 @@ export async function listMembers(
 export async function findInactive(
     db: TenantClient,
     tenant: Tenant,
-    opts: { days: number; mealType?: MealType | 'any'; groupId?: string | null } = { days: 2 },
+    opts: ScopeOpts & { days: number; mealType?: MealType | 'any' } = { days: 2 },
 ): Promise<InactiveRow[]> {
     const days = Math.max(1, Math.min(60, opts.days || 2));
     const meal = opts.mealType && opts.mealType !== 'any' ? opts.mealType : null;
 
     const members = await db.member.findMany({
-        where: { status: 'active', role: 'member', ...groupScope(opts.groupId) },
+        where: { status: 'active', role: 'member', ...groupScope(opts.groupId, opts.allowedGroupIds) },
         include: withGroups,
     });
 
@@ -141,10 +159,10 @@ export async function findInactive(
 /// Bugun ma'lum ovqatni hali yubormaganlar (barcha guruhlar bo'ylab)
 export async function findMissingToday(
     db: TenantClient,
-    opts: { mealType?: MealType | 'any'; groupId?: string | null } = {},
+    opts: ScopeOpts & { mealType?: MealType | 'any' } = {},
 ): Promise<Array<MemberBrief & { missing: MealType[] }>> {
     const members = await db.member.findMany({
-        where: { status: 'active', role: 'member', ...groupScope(opts.groupId) },
+        where: { status: 'active', role: 'member', ...groupScope(opts.groupId, opts.allowedGroupIds) },
         include: withGroups,
     });
 
@@ -164,11 +182,11 @@ export async function findMissingToday(
 export async function getStats(
     db: TenantClient,
     tenant: Tenant,
-    opts: { days?: number; groupId?: string | null } = {},
+    opts: ScopeOpts & { days?: number } = {},
 ): Promise<{ rows: StatsRow[]; days: number; from: string; to: string }> {
     const days = Math.max(1, Math.min(90, opts.days ?? 7));
     const members = await db.member.findMany({
-        where: { status: 'active', role: 'member', ...groupScope(opts.groupId) },
+        where: { status: 'active', role: 'member', ...groupScope(opts.groupId, opts.allowedGroupIds) },
         include: withGroups,
     });
 
@@ -221,19 +239,24 @@ export async function memberReport(db: TenantClient, memberId: string, days = 7)
 
 /// A'zolarni ism/username bo'yicha izlash.
 /// SQLite'da `mode: 'insensitive'` yo'q — shuning uchun nameLc ustuni ishlatiladi.
-export async function searchMembers(db: TenantClient, query: string): Promise<MemberBrief[]> {
+export async function searchMembers(
+    db: TenantClient,
+    query: string,
+    allowedGroupIds?: string[] | null,
+): Promise<MemberBrief[]> {
     const q = query.trim();
     if (!q) return [];
     const lc = q.toLowerCase();
+    const scope = groupScope(null, allowedGroupIds);
     const members = await db.member.findMany({
-        where: { OR: [{ nameLc: { contains: lc } }, { telegramId: q }] },
+        where: { OR: [{ nameLc: { contains: lc } }, { telegramId: q }], ...scope },
         include: withGroups,
         take: 25,
     });
 
     // username uchun alohida — kichik harfga keltirib qo'lda solishtiramiz
     const byUsername = await db.member.findMany({
-        where: { username: { not: null } },
+        where: { username: { not: null }, ...scope },
         include: withGroups,
         take: 200,
     });

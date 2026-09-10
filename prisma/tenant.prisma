@@ -82,10 +82,20 @@ model GroupMember {
   group    Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
   memberId String
   member   Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  /// SHU GURUHDAGI roli: coach | member.
+  ///
+  /// Member.role — global (butun bot bo'ylab hamma guruhni ko'radi).
+  /// Bu esa faqat shu guruhga tegishli: bir murabbiy "Ertalabki guruh"ni,
+  /// boshqasi "Kechki guruh"ni yuritsin degani. Guruh murabbiysi faqat
+  /// o'z guruhining a'zolarini va statistikasini ko'radi.
+  role String @default("member")
+
   joinedAt DateTime @default(now())
 
   @@unique([groupId, memberId])
   @@index([memberId])
+  @@index([groupId, role])
 }
 
 model MealRecord {

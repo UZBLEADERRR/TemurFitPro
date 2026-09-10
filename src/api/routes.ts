@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { prisma } from '../core/db';
-import { authenticate, requireCoach, AuthedRequest } from './auth';
+import { authenticate, requireCoach, scopedGroup, AuthedRequest } from './auth';
 import { MEAL_TYPES } from '../core/meals';
 import { todayIn, safeTz, lastNDates } from '../core/time';
 import { findInactive, getStats, listMembers, memberReport, listGroups, findMissingToday } from '../features/filters';
@@ -45,14 +45,20 @@ api.get('/me', wrap(async (req, res) => {
 api.get('/board', wrap(async (req, res) => {
     const { tenant, db } = req;
     const date = String(req.query.date || todayIn(safeTz(tenant.timezone)));
-    const groupId = req.query.group ? String(req.query.group) : null;
+    const g = scopedGroup(req, res);
+    if (!g) return;
     const scopeToSelf = req.role === 'member';
 
     const members = await db.member.findMany({
         where: {
             status: 'active',
             ...(scopeToSelf && req.member ? { id: req.member.id } : {}),
-            ...(groupId ? { groups: { some: { groupId } } } : {}),
+            ...(g.groupId
+                ? { groups: { some: { groupId: g.groupId } } }
+                : // Guruh murabbiysi faqat o'z guruhlarining a'zolarini ko'radi
+                  req.scope.groupIds
+                  ? { groups: { some: { groupId: { in: req.scope.groupIds } } } }
+                  : {}),
         },
         include: { groups: { include: { group: true } } },
         orderBy: { joinedAt: 'asc' },
@@ -86,7 +92,7 @@ api.get('/board', wrap(async (req, res) => {
 }));
 
 api.get('/groups', wrap(async (req, res) => {
-    const groups = await listGroups(req.db);
+    const groups = await listGroups(req.db, req.scope.groupIds);
     res.json(
         await Promise.all(
             groups.map(async g => ({
@@ -100,26 +106,30 @@ api.get('/groups', wrap(async (req, res) => {
 
 api.get('/stats', requireCoach, wrap(async (req, res) => {
     const days = Math.min(90, Math.max(1, Number(req.query.days) || 7));
-    const groupId = req.query.group ? String(req.query.group) : null;
-    res.json(await getStats(req.db, req.tenant, { days, groupId }));
+    const g = scopedGroup(req, res);
+    if (!g) return;
+    res.json(await getStats(req.db, req.tenant, { days, ...g, allowedGroupIds: req.scope.groupIds }));
 }));
 
 /// Yubormaganlar — standart holatda BARCHA guruhlar bo'ylab
 api.get('/inactive', requireCoach, wrap(async (req, res) => {
     const days = Math.min(60, Math.max(1, Number(req.query.days) || 2));
-    const groupId = req.query.group ? String(req.query.group) : null;
-    res.json(await findInactive(req.db, req.tenant, { days, groupId }));
+    const g = scopedGroup(req, res);
+    if (!g) return;
+    res.json(await findInactive(req.db, req.tenant, { days, ...g, allowedGroupIds: req.scope.groupIds }));
 }));
 
 /// Bugun to'liq yubormaganlar — barcha guruhlar
 api.get('/missing-today', requireCoach, wrap(async (req, res) => {
-    const groupId = req.query.group ? String(req.query.group) : null;
-    res.json(await findMissingToday(req.db, { groupId }));
+    const g = scopedGroup(req, res);
+    if (!g) return;
+    res.json(await findMissingToday(req.db, { ...g, allowedGroupIds: req.scope.groupIds }));
 }));
 
 api.get('/members', requireCoach, wrap(async (req, res) => {
-    const groupId = req.query.group ? String(req.query.group) : null;
-    res.json(await listMembers(req.db, { groupId }));
+    const g = scopedGroup(req, res);
+    if (!g) return;
+    res.json(await listMembers(req.db, { ...g, allowedGroupIds: req.scope.groupIds }));
 }));
 
 api.get('/member/:id', wrap(async (req, res) => {
@@ -127,6 +137,14 @@ api.get('/member/:id', wrap(async (req, res) => {
     const id = req.params.id === 'me' ? req.member?.id : req.params.id;
     if (!id) return res.status(404).json({ error: "A'zo topilmadi" });
     if (req.role === 'member' && id !== req.member?.id) return res.status(403).json({ error: 'Ruxsat yoʻq' });
+
+    // Guruh murabbiysi o'ziga biriktirilmagan guruhning a'zosini ko'ra olmasin
+    if (req.scope.groupIds && id !== req.member?.id) {
+        const inScope = await req.db.groupMember.count({
+            where: { memberId: id, groupId: { in: req.scope.groupIds } },
+        });
+        if (!inScope) return res.status(403).json({ error: 'Bu aʼzo sizga biriktirilmagan' });
+    }
 
     const rep = await memberReport(req.db, id, days);
     if (!rep) return res.status(404).json({ error: "A'zo topilmadi" });

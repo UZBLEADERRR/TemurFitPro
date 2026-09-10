@@ -22,6 +22,7 @@ import { deliverToMember, describeAttempts, CHANNEL_LABEL } from '../features/de
 import { isSuperAdmin, registerIncomingGroup, markGroupLeft } from '../core/tenants';
 import { notifySuperAdmins } from '../features/notify';
 import { LIVE_GROUP, statusBadge } from '../core/groups';
+import { scopeFor, allowsGroup, FULL_SCOPE, type Scope } from '../core/scope';
 import { getTenantState, setTenantState, clearTenantState } from './session';
 import { ask, aiAvailable, aiOffReason, clearHistory } from '../ai/agent';
 import type { Role } from '../core/roles';
@@ -140,14 +141,18 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
         const g = await requireCoach(ctx);
         if (!g) return;
         const days = Number((ctx.message as any).text.split(/\s+/)[1]) || 2;
-        await showInactive(ctx, g.tenant, g.db, days, null);
+        await showInactive(ctx, g.tenant, g.db, g.scope, days, null);
     });
 
     bot.command('stat', async ctx => {
         const g = await requireCoach(ctx);
         if (!g) return;
         const days = Number((ctx.message as any).text.split(/\s+/)[1]) || 7;
-        await reply(ctx, formatStats(await getStats(g.db, g.tenant, { days })), statsMenu(days));
+        await reply(
+            ctx,
+            formatStats(await getStats(g.db, g.tenant, { days, allowedGroupIds: g.scope.groupIds })),
+            statsMenu(days),
+        );
     });
 
     bot.command('tozalash', async ctx => {
@@ -161,7 +166,7 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
     bot.command('bugun', async ctx => {
         const g = await requireCoach(ctx);
         if (!g) return;
-        await reply(ctx, await todayOverview(g.db, g.tenant), backTo('c:menu'));
+        await reply(ctx, await todayOverview(g.db, g.tenant, g.scope), backTo('c:menu'));
     });
 
     // ---------- Callback tugmalar ----------
@@ -176,18 +181,18 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
         const member = await db.member.findUnique({ where: { telegramId: String(ctx.from.id) } });
         if (!member) return;
 
-        const manager = isCoachRole(member.role) || (await isSuperAdmin(String(ctx.from.id)));
+        const scope = await scopeFor(db, member, await isSuperAdmin(String(ctx.from.id)));
         const [ns, action, arg, extra] = data.split(':');
 
         try {
             if (ns === 'c') {
-                if (!manager) {
+                if (!scope.isManager) {
                     await ctx
                         .answerCbQuery("Bu bo'lim faqat murabbiy uchun", { show_alert: true })
                         .catch(() => undefined);
                     return;
                 }
-                await handleCoachAction(ctx, tenant, db, action, arg, extra);
+                await handleCoachAction(ctx, tenant, db, scope, action, arg, extra);
             } else if (ns === 'm') {
                 await handleMemberAction(ctx, db, member, action);
             }
@@ -244,7 +249,7 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
                 tenant,
                 actorTgId: String(ctx.from.id),
                 actorName: member.name,
-                role: await roleOf(member, String(ctx.from.id)),
+                role: await roleOf(db, member, String(ctx.from.id)),
                 audio: { buffer, mimeType: file.mime_type || 'audio/ogg' },
             });
             await reply(ctx, (res.transcript ? `🎙 <i>${esc(res.transcript)}</i>\n\n` : '') + res.reply);
@@ -291,7 +296,7 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
             tenant,
             actorTgId: String(ctx.from.id),
             actorName: member.name,
-            role: await roleOf(member, String(ctx.from.id)),
+            role: await roleOf(db, member, String(ctx.from.id)),
             text,
         });
         await reply(ctx, res.reply);
@@ -319,33 +324,47 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
 
     // ================= YORDAMCHILAR =================
 
-    async function roleOf(member: Member, telegramId: string): Promise<Role> {
+    /// AI uchun rol. Guruh murabbiysi ham 'coach' hisoblanadi —
+    /// lekin uning so'rovlari baribir o'z guruhi bilan cheklangan.
+    async function roleOf(db: TenantClient, member: Member, telegramId: string): Promise<Role> {
         if (await isSuperAdmin(telegramId)) return 'super';
-        return isCoachRole(member.role) ? 'coach' : 'member';
+        const scope = await scopeFor(db, member, false);
+        return scope.isManager ? 'coach' : 'member';
     }
 
-    async function requireCoach(ctx: Context): Promise<{ tenant: Tenant; db: TenantClient } | null> {
+    async function requireCoach(
+        ctx: Context,
+    ): Promise<{ tenant: Tenant; db: TenantClient; scope: Scope } | null> {
         if (ctx.chat?.type !== 'private') return null;
         const ctxData = await load();
         if (!ctxData) return null;
         const member = await ctxData.db.member.findUnique({ where: { telegramId: String(ctx.from!.id) } });
-        const ok = (member && isCoachRole(member.role)) || (await isSuperAdmin(String(ctx.from!.id)));
-        if (!ok) {
+        const scope = await scopeFor(ctxData.db, member, await isSuperAdmin(String(ctx.from!.id)));
+        if (!scope.isManager) {
             await ctx.reply('Bu buyruq faqat murabbiy uchun.').catch(() => undefined);
             return null;
         }
-        return ctxData;
+        return { ...ctxData, scope };
     }
 
     async function showMenu(ctx: Context, tenant: Tenant, db: TenantClient, member: Member, greet: boolean) {
-        const manager = isCoachRole(member.role) || (await isSuperAdmin(String(ctx.from!.id)));
+        const scope = await scopeFor(db, member, await isSuperAdmin(String(ctx.from!.id)));
 
-        if (manager) {
-            const groups = await db.group.count({ where: LIVE_GROUP });
-            const people = await db.member.count({ where: { status: 'active', role: 'member' } });
+        if (scope.isManager) {
+            const groupFilter = scope.groupIds ? { id: { in: scope.groupIds } } : {};
+            const groups = await db.group.count({ where: { ...LIVE_GROUP, ...groupFilter } });
+            const people = await db.member.count({
+                where: {
+                    status: 'active',
+                    role: 'member',
+                    ...(scope.groupIds ? { groups: { some: { groupId: { in: scope.groupIds } } } } : {}),
+                },
+            });
+            // Guruh murabbiysiga faqat o'z guruhi ko'rinayotgani aniq bo'lsin
+            const badge = scope.isGroupCoach ? ` · 🎯 sizning guruh${groups > 1 ? 'laringiz' : 'ingiz'}` : '';
             const head = greet
-                ? `👋 Salom, <b>${esc(member.name)}</b>!\n\n🏠 ${groups} guruh · 👥 ${people} a'zo`
-                : `🏋️ <b>Boshqaruv paneli</b>\n\n🏠 ${groups} guruh · 👥 ${people} a'zo`;
+                ? `👋 Salom, <b>${esc(member.name)}</b>!\n\n🏠 ${groups} guruh · 👥 ${people} a'zo${badge}`
+                : `🏋️ <b>Boshqaruv paneli</b>\n\n🏠 ${groups} guruh · 👥 ${people} a'zo${badge}`;
             await reply(ctx, head, coachMenu(tenant.id, aiAvailable(tenant) ? tenant.agentName : undefined));
             return;
         }
@@ -365,11 +384,14 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
         ctx: Context,
         tenant: Tenant,
         db: TenantClient,
+        scope: Scope,
         days: number,
         groupId: string | null,
     ) {
-        const rows = await findInactive(db, tenant, { days, groupId });
-        const totalGroups = await db.group.count({ where: LIVE_GROUP });
+        const rows = await findInactive(db, tenant, { days, groupId, allowedGroupIds: scope.groupIds });
+        const totalGroups = await db.group.count({
+            where: { ...LIVE_GROUP, ...(scope.groupIds ? { id: { in: scope.groupIds } } : {}) },
+        });
         await setTenantState(tenant.botId, String(ctx.chat!.id), 'idle', { days, groupId });
         await reply(ctx, formatInactive(rows, days, totalGroups), inactiveMenu(days, groupId));
     }
@@ -378,6 +400,7 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
         ctx: Context,
         tenant: Tenant,
         db: TenantClient,
+        scope: Scope,
         action: string,
         arg?: string,
         extra?: string,
@@ -395,12 +418,12 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
                 const st = await getTenantState(tenant.botId, chatId);
                 const groupId = (st.payload.groupId as string | null) ?? null;
                 // Kun tugmasi bosilganda guruh filtri saqlanadi; "barcha guruhlar" bosilsa tozalanadi
-                await showInactive(ctx, tenant, db, Number(arg) || 2, extra === 'keep' ? groupId : null);
+                await showInactive(ctx, tenant, db, scope, Number(arg) || 2, extra === 'keep' ? groupId : null);
                 return;
             }
 
             case 'pickgroup': {
-                const groups = await listGroups(db);
+                const groups = await listGroups(db, scope.groupIds);
                 if (groups.length <= 1) {
                     await reply(ctx, "Faqat bitta guruh bor — filtr kerak emas.", backTo('c:menu'));
                     return;
@@ -414,23 +437,32 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
             }
 
             case 'ingroup': {
+                // Guruh murabbiysi boshqa guruhning id sini qo'lda yubora olmasin
+                if (arg && !allowsGroup(scope, arg)) {
+                    await reply(ctx, '⛔️ Bu guruh sizga biriktirilmagan.', backTo('c:menu'));
+                    return;
+                }
                 const st = await getTenantState(tenant.botId, chatId);
-                await showInactive(ctx, tenant, db, Number(st.payload.days) || 2, arg ?? null);
+                await showInactive(ctx, tenant, db, scope, Number(st.payload.days) || 2, arg ?? null);
                 return;
             }
 
             case 'today':
-                await reply(ctx, await todayOverview(db, tenant), backTo('c:menu'));
+                await reply(ctx, await todayOverview(db, tenant, scope), backTo('c:menu'));
                 return;
 
             case 'stats': {
                 const days = Number(arg) || 7;
-                await reply(ctx, formatStats(await getStats(db, tenant, { days })), statsMenu(days));
+                await reply(
+                    ctx,
+                    formatStats(await getStats(db, tenant, { days, allowedGroupIds: scope.groupIds })),
+                    statsMenu(days),
+                );
                 return;
             }
 
             case 'members': {
-                const rows = await listMembers(db);
+                const rows = await listMembers(db, { allowedGroupIds: scope.groupIds });
                 if (rows.length === 0) {
                     await reply(ctx, "👥 Hali a'zo yo'q.", backTo('c:menu'));
                     return;
@@ -774,14 +806,14 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
     }
 
     /// Barcha guruhlarning bugungi holati — bitta ekranda
-    async function todayOverview(db: TenantClient, tenant: Tenant): Promise<string> {
-        const groups = await listGroups(db);
+    async function todayOverview(db: TenantClient, tenant: Tenant, scope: Scope = FULL_SCOPE): Promise<string> {
+        const groups = await listGroups(db, scope.groupIds);
         if (groups.length === 0) {
             return "📭 Hali guruh ulanmagan.\n\nBotni guruhga qo'shing — u avtomatik ro'yxatga olinadi.";
         }
         const parts: string[] = [];
         for (const g of groups) parts.push(await renderTable(db, tenant, g));
-        parts.push(formatMissingToday(await findMissingToday(db, {})));
+        parts.push(formatMissingToday(await findMissingToday(db, { allowedGroupIds: scope.groupIds })));
         return parts.join('\n\n──────────\n\n');
     }
 }

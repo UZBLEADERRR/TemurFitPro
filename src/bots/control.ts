@@ -23,6 +23,12 @@ import {
     maskKey, publicUrl,
 } from '../core/settings';
 import { encryptionKeySource, secretsFilePath } from '../core/secrets';
+import { setBackupEnabled, setBackupHour } from '../core/settings';
+import {
+    exportTenantFile, parseBackup, importTenant, backupStats, formatRestore,
+    BackupError, type RestoreMode,
+} from '../features/backup';
+import { downloadFile as tgDownload } from '../core/telegram';
 import { formatIn, safeTz, daysAgoIn } from '../core/time';
 import { getStats, formatStats, findInactive, formatInactive } from '../features/filters';
 
@@ -130,7 +136,8 @@ function tenantMenu(t: Tenant) {
             Markup.button.callback('⚠️ Yubormaganlar', `s:inactive:${t.id}`),
             Markup.button.callback('📈 Reyting', `s:tstat:${t.id}`),
         ],
-        [toggle, Markup.button.callback("🧹 Tozalash", `s:purge:${t.id}`)],
+        [Markup.button.callback('💾 Zaxira', `s:backup:${t.id}`), Markup.button.callback("🧹 Tozalash", `s:purge:${t.id}`)],
+        [toggle],
         [Markup.button.callback("❌ Botni butunlay o'chirish", `s:del:${t.id}`)],
         [Markup.button.callback('⬅️ Botlar', 's:bots')],
     ]);
@@ -292,6 +299,112 @@ controlBot.on('callback_query', async ctx => {
                     `🔄 Ona bot: ${controlOk ? '✅' : '❌'} · Mijoz botlari: ${res.fixed}/${res.checked} tiklandi`,
                 );
                 return showWebhooks(ctx);
+            }
+
+            case 'gcoach':
+                return showGroupCoaches(ctx, id, extra!);
+
+            case 'gcoachset': {
+                // s:gcoachset:<tenantId>:<groupId>:<memberId>
+                const [, , tenantId, groupId, memberId] = data.split(':');
+                const t = await prisma.tenant.findUnique({ where: { id: tenantId } });
+                if (!t) return showMain(ctx);
+                const db = await tenantDb(t.botId);
+                const link = await db.groupMember.findUnique({
+                    where: { groupId_memberId: { groupId, memberId } },
+                    include: { member: true },
+                });
+                if (!link) return showGroupCoaches(ctx, tenantId, groupId);
+
+                const next = link.role === 'coach' ? 'member' : 'coach';
+                await db.groupMember.update({
+                    where: { groupId_memberId: { groupId, memberId } },
+                    data: { role: next },
+                });
+                await audit(
+                    tenantId,
+                    String(ctx.from.id),
+                    next === 'coach' ? 'groupcoach.add' : 'groupcoach.remove',
+                    `${link.member.name} @ ${groupId}`,
+                );
+                return showGroupCoaches(ctx, tenantId, groupId);
+            }
+
+            case 'backup':
+                return showBackup(ctx, id);
+
+            case 'bktoggle':
+                await setBackupEnabled(!settings().backupEnabled);
+                await audit(null, String(ctx.from.id), 'backup.auto', settings().backupEnabled ? 'on' : 'off');
+                return showBackup(ctx, id);
+
+            case 'bkhour': {
+                // Soatlarni to'rt qatorda ko'rsatamiz
+                const rows: any[][] = [];
+                for (let h = 0; h < 24; h += 6) {
+                    rows.push(
+                        [0, 1, 2, 3, 4, 5].map(i =>
+                            Markup.button.callback(
+                                `${settings().backupHour === h + i ? '•' : ''}${String(h + i).padStart(2, '0')}`,
+                                `s:bksethour:${id}:${h + i}`,
+                            ),
+                        ),
+                    );
+                }
+                rows.push([Markup.button.callback('⬅️ Orqaga', `s:backup:${id}`)]);
+                return reply(ctx, '🕒 <b>Zaxira qaysi soatda ketsin?</b> (UTC)', Markup.inlineKeyboard(rows));
+            }
+
+            case 'bksethour':
+                await setBackupHour(Number(extra));
+                await audit(null, String(ctx.from.id), 'backup.hour', String(extra));
+                return showBackup(ctx, id);
+
+            case 'bknow': {
+                const t = await prisma.tenant.findUnique({ where: { id } });
+                if (!t) return showMain(ctx);
+                await reply(ctx, '⏳ Zaxira tayyorlanmoqda...');
+                await sendBackup(ctx, t);
+                return;
+            }
+
+            case 'bkrestore':
+                await setControlState(String(ctx.chat!.id), 'await:backupFile', { tenantId: id });
+                return reply(
+                    ctx,
+                    [
+                        '♻️ <b>Fayldan tiklash</b>',
+                        '',
+                        'Zaxira faylini shu yerga <b>hujjat sifatida</b> tashlang',
+                        '(<code>.json</code> yoki <code>.json.gz</code>).',
+                        '',
+                        'Fayl kelgach nima tiklanishini ko\'rsatib, tasdiq so\'rayman.',
+                    ].join('\n'),
+                    back(`s:backup:${id}`),
+                );
+
+            case 'bkgo': {
+                // s:bkgo:<tenantId>:<merge|replace>
+                const mode = (extra === 'replace' ? 'replace' : 'merge') as RestoreMode;
+                const st = await getControlState(String(ctx.chat!.id));
+                const fileId = st.payload.fileId as string | undefined;
+                if (!fileId) return reply(ctx, "⏳ Fayl eskirdi — qaytadan tashlang.", back(`s:backup:${id}`));
+
+                const t = await prisma.tenant.findUnique({ where: { id } });
+                if (!t) return showMain(ctx);
+
+                await clearControlState(String(ctx.chat!.id));
+                await reply(ctx, '⏳ Tiklanmoqda...');
+                try {
+                    const buffer = await tgDownload(controlBot, fileId);
+                    const data = parseBackup(buffer);
+                    const res = await importTenant(t, data, mode, String(ctx.from.id));
+                    await reply(ctx, formatRestore(res), back(`s:backup:${id}`));
+                } catch (e) {
+                    const msg = e instanceof BackupError ? e.message : String(e).slice(0, 300);
+                    await reply(ctx, `❌ Tiklanmadi: ${esc(msg)}`, back(`s:backup:${id}`));
+                }
+                return;
             }
 
             case 'keys':
@@ -493,6 +606,82 @@ controlBot.on('callback_query', async ctx => {
 });
 
 // ---------- Ovozli buyruq ----------
+/// Zaxira faylini qabul qilish. Foydalanuvchi faylni "♻️ Fayldan tiklash"
+/// bosgandan keyin tashlaydi; darrov tiklamaymiz — avval ichida nima borligini
+/// ko'rsatib, tasdiq so'raymiz.
+controlBot.on('document', async ctx => {
+    const chatId = String(ctx.chat.id);
+    const session = await getControlState(chatId);
+    const doc = ctx.message.document;
+
+    if (session.state !== 'await:backupFile') {
+        await reply(
+            ctx,
+            "📎 Faylni tiklash uchun avval botni tanlang: 🤖 Botlar → bot → 💾 Zaxira → ♻️ Fayldan tiklash.",
+            await mainMenuWithPending(),
+        );
+        return;
+    }
+
+    const tenantId = String(session.payload.tenantId);
+    const t = await prisma.tenant.findUnique({ where: { id: tenantId } });
+    if (!t) {
+        await clearControlState(chatId);
+        return showMain(ctx);
+    }
+
+    // Telegram bot API 20 MB dan katta faylni yuklab bera olmaydi
+    if ((doc.file_size ?? 0) > 20 * 1024 * 1024) {
+        return reply(ctx, '❌ Fayl 20 MB dan katta — Telegram uni botga bermaydi.', back(`s:backup:${tenantId}`));
+    }
+
+    await ctx.sendChatAction('typing').catch(() => undefined);
+
+    try {
+        const buffer = await tgDownload(controlBot, doc.file_id);
+        const data = parseBackup(buffer);
+        const st = backupStats(data);
+
+        const mismatch =
+            data.botId && data.botId !== t.botId
+                ? `\n⚠️ <b>Diqqat:</b> bu fayl BOSHQA botniki (@${esc(data.botUsername || data.botId)}).\n`
+                : '';
+
+        await setControlState(chatId, 'await:backupConfirm', { tenantId, fileId: doc.file_id });
+
+        await reply(
+            ctx,
+            [
+                '📦 <b>Fayl o\'qildi</b>',
+                `<code>${esc(doc.file_name || 'zaxira')}</code>`,
+                data.exportedAt ? `🕒 Olingan: ${esc(data.exportedAt.slice(0, 16).replace('T', ' '))}` : '',
+                mismatch,
+                'Ichida:',
+                `🏠 ${st.groups} guruh · 👥 ${st.members} a'zo`,
+                `🔗 ${st.links} guruh a'zoligi · 🍽 ${st.meals} ovqat qaydi`,
+                '',
+                `Qaysi usulda tiklay? Bot: <b>@${esc(t.botUsername)}</b>`,
+                '',
+                "➕ <b>Qo'shib tiklash</b> — hech narsa o'chmaydi. Yo'q yozuvlar qo'shiladi,",
+                'bor yozuvlar joyida qoladi. <b>Odatda shu kerak.</b>',
+                '',
+                "🔄 <b>To'liq almashtirish</b> — botning hozirgi hamma ma'lumoti O'CHADI",
+                'va faqat fayldagisi qoladi.',
+            ]
+                .filter(Boolean)
+                .join('\n'),
+            Markup.inlineKeyboard([
+                [Markup.button.callback("➕ Qo'shib tiklash", `s:bkgo:${tenantId}:merge`)],
+                [Markup.button.callback("🔄 To'liq almashtirish", `s:bkgo:${tenantId}:replace`)],
+                [Markup.button.callback('❌ Bekor', `s:backup:${tenantId}`)],
+            ]),
+        );
+    } catch (e) {
+        const msg = e instanceof BackupError ? e.message : String(e).slice(0, 300);
+        await reply(ctx, `❌ ${esc(msg)}`, back(`s:backup:${tenantId}`));
+    }
+});
+
 controlBot.on(['voice', 'audio'], async ctx => {
     const session = await getControlState(String(ctx.chat.id));
     if (session.state !== 'ai') {
@@ -990,8 +1179,14 @@ async function showGroup(ctx: Context, tenantId: string, groupId: string) {
     } else {
         actions.push([Markup.button.callback('⛔️ Faoliyatini to\'xtatish', `s:gno:${tenantId}:${g.id}`)]);
     }
+    actions.push([Markup.button.callback('🎯 Shu guruh murabbiysi', `s:gcoach:${tenantId}:${g.id}`)]);
     actions.push([Markup.button.callback("🧹 Ma'lumotlarini tozalash", `s:gpurge:${tenantId}:${g.id}`)]);
     actions.push([Markup.button.callback('⬅️ Guruhlar', `s:groups:${tenantId}`)]);
+
+    const coaches = await db.groupMember.findMany({
+        where: { groupId: g.id, role: 'coach' },
+        include: { member: true },
+    });
 
     return reply(
         ctx,
@@ -1002,8 +1197,93 @@ async function showGroup(ctx: Context, tenantId: string, groupId: string) {
             '',
             `👥 A'zolar: <b>${people}</b>`,
             `🍽 Ovqat qaydlari: <b>${meals}</b>`,
+            `🎯 Murabbiy: ${coaches.length ? coaches.map(c => `<b>${esc(c.member.name)}</b>`).join(', ') : '<i>tayinlanmagan</i>'}`,
         ].join('\n'),
         Markup.inlineKeyboard(actions),
+    );
+}
+
+/// Shu GURUHNING murabbiylari. Global murabbiydan farqi: bu odam faqat shu
+/// guruhni ko'radi. Har bir guruhga alohida murabbiy tayinlash uchun.
+async function showGroupCoaches(ctx: Context, tenantId: string, groupId: string) {
+    const t = await prisma.tenant.findUnique({ where: { id: tenantId } });
+    if (!t) return;
+    const db = await tenantDb(t.botId);
+    const g = await db.group.findUnique({ where: { id: groupId } });
+    if (!g) return showGroups(ctx, tenantId);
+
+    const links = await db.groupMember.findMany({
+        where: { groupId },
+        include: { member: true },
+        orderBy: { joinedAt: 'asc' },
+    });
+
+    const coaches = links.filter(l => l.role === 'coach');
+
+    // Guruhdagi har bir a'zoni bosib murabbiy qilish/olib tashlash mumkin
+    const rows = links.slice(0, 60).map(l => [
+        Markup.button.callback(
+            `${l.role === 'coach' ? '🎯' : '👤'} ${l.member.name.slice(0, 28)}`,
+            `s:gcoachset:${tenantId}:${groupId}:${l.memberId}`,
+        ),
+    ]);
+    rows.push([Markup.button.callback('⬅️ Guruh', `s:gview:${tenantId}:${groupId}`)]);
+
+    return reply(
+        ctx,
+        [
+            `🎯 <b>Guruh murabbiysi</b>`,
+            `🏠 ${esc(g.title || g.chatId)}`,
+            '',
+            coaches.length
+                ? `Hozir: ${coaches.map(c => `<b>${esc(c.member.name)}</b>`).join(', ')}`
+                : '<i>Hali tayinlanmagan.</i>',
+            '',
+            "Ismga bosing — murabbiylik <b>shu guruh uchun</b> qo'shiladi yoki olinadi.",
+            '',
+            "<i>Guruh murabbiysi faqat SHU guruhning a'zolarini, jadvalini va",
+            "statistikasini ko'radi. Boshqa guruhlar unga ko'rinmaydi.</i>",
+            '',
+            "<i>Botning barcha guruhlarini ko'radigan murabbiy kerak bo'lsa —",
+            'bot menyusidagi 🎯 Murabbiylar dan tayinlang.</i>',
+        ].join('\n'),
+        Markup.inlineKeyboard(rows),
+    );
+}
+
+/// Bot uchun zaxira ekrani
+async function showBackup(ctx: Context, tenantId: string) {
+    const t = await prisma.tenant.findUnique({ where: { id: tenantId } });
+    if (!t) return;
+
+    return reply(
+        ctx,
+        [
+            `💾 <b>Zaxira</b> — @${esc(t.botUsername)}`,
+            '',
+            settings().backupEnabled
+                ? `✅ Har kuni <b>${String(settings().backupHour).padStart(2, '0')}:00 UTC</b> da super adminlarga yuboriladi.`
+                : "⏸ Avtomatik yuborish o'chirilgan.",
+            '',
+            "Faylda: guruhlar, a'zolar, kim qaysi guruhda, butun ovqat tarixi va bot sozlamalari.",
+            '',
+            "Biror guruhning ma'lumoti yo'qolsa — o'sha faylni shu yerga tashlang,",
+            'hammasi qaytadi.',
+            '',
+            '<i>Faylda bot tokeni va maxfiy kalitlar YO\'Q — u oddiy chatda yotishi xavfsiz.</i>',
+        ].join('\n'),
+        Markup.inlineKeyboard([
+            [Markup.button.callback('📤 Hozir yuborish', `s:bknow:${tenantId}`)],
+            [Markup.button.callback('♻️ Fayldan tiklash', `s:bkrestore:${tenantId}`)],
+            [
+                Markup.button.callback(
+                    settings().backupEnabled ? '⏸ Avtomatikni o\'chirish' : '▶️ Avtomatikni yoqish',
+                    `s:bktoggle:${tenantId}`,
+                ),
+                Markup.button.callback('🕒 Soat', `s:bkhour:${tenantId}`),
+            ],
+            [Markup.button.callback('⬅️ Orqaga', `s:bot:${tenantId}`)],
+        ]),
     );
 }
 
@@ -1110,6 +1390,29 @@ async function reply(ctx: Context, text: string, keyboard?: any): Promise<void> 
                 log.warn('control-bot', `HTML xatosi: ${tgError(e)}`);
                 await ctx.reply(chunks[i].replace(/<[^>]+>/g, '')).catch(() => undefined);
             });
+    }
+}
+
+/// Zaxira faylini shu chatga yuborish
+async function sendBackup(ctx: Context, t: Tenant): Promise<void> {
+    try {
+        const { buffer, filename, stats } = await exportTenantFile(t);
+        await controlBot.telegram.sendDocument(
+            ctx.chat!.id,
+            { source: buffer, filename },
+            {
+                caption: [
+                    `💾 <b>Zaxira</b> — @${esc(t.botUsername)}`,
+                    `🏠 ${stats.groups} guruh · 👥 ${stats.members} a'zo · 🍽 ${stats.meals} qayd`,
+                    '',
+                    "<i>Ma'lumot yo'qolsa shu faylni botga qaytarib tashlang.</i>",
+                ].join('\n'),
+                parse_mode: 'HTML',
+            },
+        );
+    } catch (e) {
+        log.error('backup', `zaxira yuborilmadi (${t.botId})`, e);
+        await reply(ctx, `❌ Zaxira yuborilmadi: ${esc(tgError(e))}`, back(`s:backup:${t.id}`));
     }
 }
 

@@ -22,6 +22,8 @@ platformaga aylandi.
 | Murabbiy | Faqat rol belgisi | To'liq panel, barcha guruhlar bo'ylab saralash |
 | Mini ilova | Bitta ekran, auth yo'q | 4 ekran, initData HMAC imzosi |
 | Sozlash | 6 ta env o'zgaruvchisi | Railway'da 2 ta, qolgani bot ichida |
+| Murabbiy doirasi | Butun bot | Global yoki faqat bitta guruh |
+| Zaxira | Yo'q | Har kuni fayl, bir tugma bilan tiklash |
 
 ---
 
@@ -163,9 +165,22 @@ Botni birinchi bo'lib `/start` bosgan odam avtomatik **ega** (owner) bo'ladi.
 
 | Rol | Qayerda | Nima qila oladi |
 |---|---|---|
-| **Super admin** | Ona bot | Bot qo'shish/o'chirish, guruhlar, murabbiylar, tozalash, disk hisoboti |
-| **Murabbiy** (owner/coach) | O'z boti | Saralash, statistika, sozlamalar, guruhlarni tozalash, a'zolarga xabar |
+| **Super admin** | Ona bot | Bot qo'shish/o'chirish, guruhlar, murabbiylar, zaxira, tozalash, disk hisoboti |
+| **Global murabbiy** (owner/coach) | O'z boti | Botning **barcha** guruhlari: saralash, statistika, sozlamalar, a'zolarga xabar |
+| **Guruh murabbiysi** | O'z boti | **Faqat o'ziga biriktirilgan guruh(lar)**: shu guruh a'zolari, jadvali, statistikasi |
 | **A'zo** | O'z boti | Ovqat yuborish, o'z natijasi, mini ilova |
+
+### Har bir guruhga alohida murabbiy
+
+Ona bot → 🤖 Botlar → bot → 🏠 Guruhlar → guruh → **🎯 Shu guruh murabbiysi**.
+Guruhdagi ismga bossangiz murabbiylik **shu guruh uchun** qo'shiladi yoki olinadi.
+
+Guruh murabbiysi faqat o'z guruhini ko'radi: a'zolar ro'yxati, statistika,
+"yubormaganlar", qidiruv va mini ilova — hammasi shu guruh bilan cheklangan.
+Boshqa guruhning a'zosini qidirsa ham topmaydi.
+
+Botning hamma guruhini ko'radigan murabbiy kerak bo'lsa — bot menyusidagi
+🎯 **Murabbiylar** dan tayinlanadi (bu eskisidek ishlaydi).
 
 ---
 
@@ -261,6 +276,41 @@ Yarim tundan keyin yuborilgan kechki ovqat kechagi kunga yoziladi.
 
 ---
 
+## Zaxira va tiklash
+
+Bot **har kuni** butun ma'lumotni bitta fayl qilib super adminlarga yuboradi:
+guruhlar, a'zolar, kim qaysi guruhda va qaysi guruhga murabbiy, butun ovqat
+tarixi, eslatma sozlamalari va bot sozlamalari.
+
+Ma'lumot yo'qolsa — o'sha faylni ona botga **hujjat sifatida** qaytarib
+tashlang: 🤖 Botlar → bot → 💾 **Zaxira** → ♻️ **Fayldan tiklash**.
+Bot fayl ichida nima borligini ko'rsatib, tasdiq so'raydi.
+
+Ikki xil tiklash bor:
+
+| | Nima bo'ladi |
+|---|---|
+| ➕ **Qo'shib tiklash** | Hech narsa o'chmaydi. Yo'q yozuvlar qo'shiladi, bor yozuvlar joyida qoladi. Zaxiradan **keyin** yuborilgan ovqatlar ham saqlanib qoladi. Odatda shu kerak. |
+| 🔄 **To'liq almashtirish** | Botning hozirgi hamma ma'lumoti o'chadi va faqat fayldagisi qoladi. |
+
+Tiklash **tabiiy kalit** bo'yicha ishlaydi (guruh `chatId` si, a'zo `telegramId` si,
+ovqat uchun a'zo+sana+ovqat turi). Shu sabab guruh o'chib qayta qo'shilgan bo'lsa
+ham eski zaxira to'g'ri tushadi, va bir faylni ikki marta tiklash dublikat
+yaratmaydi.
+
+Bir narsaga tegilmaydi: bot hozir guruh ichidami-yo'qmi — buni jonli holat
+biladi, eski fayl emas. Ya'ni tiklash chiqarilgan guruhni "faol" qilib qo'ymaydi.
+
+**Faylda maxfiy narsa yo'q** — bot tokeni ham, shifrlash kaliti ham unga
+tushmaydi, shuning uchun u oddiy Telegram chatida yotishi xavfsiz.
+
+Sozlash: 💾 Zaxira ekranida avtomatik yuborishni o'chirish/yoqish va soatini
+(UTC) tanlash mumkin. Standart — har kuni 02:00 UTC.
+
+> Fayl 1 MB dan oshsa gzip qilinadi (`.json.gz`). Tiklashda ikkalasi ham qabul
+> qilinadi. Telegram botga 20 MB dan katta faylni bermaydi — bunga yetguncha
+> juda ko'p vaqt kerak, lekin kerak bo'lsa 🧹 Tozalash → "30 kundan eskisi".
+
 ## Ma'lumotlarni o'chirish
 
 Har bir daraja uchun alohida tugma — SQL yozish shart emas:
@@ -321,7 +371,7 @@ lekin Telegram'dan update kelmaydi. Sinash uchun ngrok/cloudflared ishlating.
 
 ```bash
 npm run typecheck    # backend
-npm run test         # kalitlar + xabar yetkazish testlari
+npm run test         # matn, kalitlar, murabbiy doirasi, zaxira, yetkazish
 npm run build        # generate + typecheck + mini ilova
 npm run sql:tenant   # sxema o'zgarsa tenant DDL faylini yangilash
 ```
@@ -350,7 +400,8 @@ src/
     tenants.ts            Bot qo'shish/o'chirish, guruh va tozalash amallari
     crypto.ts             AES-256-GCM token shifrlash
     secrets.ts            Shifrlash kaliti va webhook siri (o'zi yaratiladi)
-    settings.ts           Bot ichidan qo'yiladigan sozlamalar (Gemini, URL)
+    settings.ts           Bot ichidan qo'yiladigan sozlamalar (Gemini, URL, zaxira)
+    scope.ts              Kim qaysi guruhni ko'radi (guruh murabbiysi)
     time.ts               Per-user timezone hisoblari
     meals.ts              Ovqat turlari va aniqlash
     roles.ts              Rol yordamchilari
@@ -365,6 +416,7 @@ src/
     business.ts           Telegram Business orqali yuborish
     delivery.ts           Yetkazish zanjiri: business → bot → guruh teg
     outbox.ts             Rejalashtirilgan xabarlar navbati
+    backup.ts             Kunlik zaxira fayli va undan tiklash
   ai/gemini.ts            Gemini klienti (hozircha ishlatilmaydi)
   api/                    Mini ilova API + initData tekshiruvi
 client/                   React + Vite mini ilova

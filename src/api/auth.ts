@@ -5,7 +5,8 @@ import type { Member } from '../generated/tenant';
 import { prisma, tenantDb, type TenantClient } from '../core/db';
 import { decrypt } from '../core/crypto';
 import { isSuperAdmin } from '../core/tenants';
-import { isCoachRole, type Role } from '../core/roles';
+import { type Role } from '../core/roles';
+import { scopeFor, allowsGroup, type Scope } from '../core/scope';
 
 // Mini App so'rovlarini Telegram initData orqali tekshiramiz.
 // Bu multi-tenant tizimda MUHIM: har bir tenantning o'z bot tokeni bilan
@@ -20,6 +21,9 @@ export interface AuthedRequest extends Request {
     member: Member | null;
     telegramId: string;
     role: Role;
+    /// Bu odam qaysi guruhlarni ko'ra oladi (null = hammasi).
+    /// Guruh murabbiysi faqat o'z guruhini ko'radi.
+    scope: Scope;
 }
 
 export function verifyInitData(initData: string, botToken: string): Record<string, string> | null {
@@ -100,15 +104,29 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
     const member = await db.member.findUnique({ where: { telegramId } });
 
     const superAdmin = await isSuperAdmin(telegramId);
-    const role: Role = superAdmin ? 'super' : member && isCoachRole(member.role) ? 'coach' : 'member';
+    const scope = await scopeFor(db, member, superAdmin);
 
     const authed = req as AuthedRequest;
     authed.tenant = tenant;
     authed.db = db;
     authed.member = member;
     authed.telegramId = telegramId;
-    authed.role = role;
+    authed.role = scope.role;
+    authed.scope = scope;
     next();
+}
+
+/// So'ralgan guruh murabbiyning doirasiga kiradimi.
+/// Kirmasa 403 — guruh murabbiysi boshqa guruhning ma'lumotini ko'ra olmasin.
+/// Qaytadi: tekshirilgan groupId (yoki null = doiradagi barcha guruhlar).
+export function scopedGroup(req: Request, res: Response): { groupId: string | null } | null {
+    const r = req as AuthedRequest;
+    const requested = r.query.group ? String(r.query.group) : null;
+    if (requested && !allowsGroup(r.scope, requested)) {
+        res.status(403).json({ error: 'Bu guruh sizga biriktirilmagan' });
+        return null;
+    }
+    return { groupId: requested };
 }
 
 export function requireCoach(req: Request, res: Response, next: NextFunction): void {

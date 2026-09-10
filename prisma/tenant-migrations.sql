@@ -13,6 +13,9 @@ ALTER TABLE "Group" ADD COLUMN "status" TEXT NOT NULL DEFAULT 'pending';
 ALTER TABLE "Group" ADD COLUMN "approvedAt" DATETIME;
 ALTER TABLE "Group" ADD COLUMN "approvedBy" TEXT;
 
+-- 2026-09: har bir guruhga alohida murabbiy tayinlash
+ALTER TABLE "GroupMember" ADD COLUMN "role" TEXT NOT NULL DEFAULT 'member';
+
 -- ESLATMA: bu yerga faqat ALTER TABLE yozing.
 -- Ma'lumotni to'ldirish (backfill) kerak bo'lsa src/core/db.ts dagi
 -- AFTER_COLUMN_ADDED ga qo'shing — u ustun HAQIQATAN qo'shilgandagina

@@ -20,6 +20,11 @@ export interface RuntimeSettings {
     publicUrl: string;
     /// PUBLIC_URL bot ichidan qo'lda qo'yilganmi
     publicUrlFromBot: boolean;
+
+    /// Kunlik zaxira fayli super adminlarga yuborilsinmi
+    backupEnabled: boolean;
+    /// Qaysi soatda (UTC, 0-23)
+    backupHour: number;
 }
 
 const KEYS = {
@@ -27,6 +32,8 @@ const KEYS = {
     geminiModel: 'geminiModel',
     aiEnabled: 'aiEnabled',
     publicUrl: 'publicUrl',
+    backupEnabled: 'backupEnabled',
+    backupHour: 'backupHour',
 } as const;
 
 let cache: RuntimeSettings = {
@@ -36,6 +43,8 @@ let cache: RuntimeSettings = {
     aiEnabled: env.AI_ENABLED,
     publicUrl: env.PUBLIC_URL,
     publicUrlFromBot: false,
+    backupEnabled: true,
+    backupHour: 2,
 };
 
 /// Joriy sozlamalar. Sinxron — bootstrap'da loadSettings() bir marta chaqiriladi,
@@ -78,7 +87,14 @@ export async function loadSettings(): Promise<void> {
         aiEnabled: map.has(KEYS.aiEnabled) ? map.get(KEYS.aiEnabled) === '1' : env.AI_ENABLED,
         publicUrl: storedUrl || env.PUBLIC_URL,
         publicUrlFromBot: !!storedUrl,
+        backupEnabled: map.get(KEYS.backupEnabled) !== '0',
+        backupHour: clampHour(map.get(KEYS.backupHour)),
     };
+}
+
+function clampHour(v: string | undefined): number {
+    const n = Number(v);
+    return Number.isInteger(n) && n >= 0 && n <= 23 ? n : 2;
 }
 
 async function put(key: string, value: string): Promise<void> {
@@ -117,6 +133,14 @@ export async function setPublicUrl(url: string): Promise<void> {
     const clean = url.trim().replace(/\/+$/, '');
     if (clean) await put(KEYS.publicUrl, clean);
     else await drop(KEYS.publicUrl);
+}
+
+export async function setBackupEnabled(on: boolean): Promise<void> {
+    await put(KEYS.backupEnabled, on ? '1' : '0');
+}
+
+export async function setBackupHour(hour: number): Promise<void> {
+    await put(KEYS.backupHour, String(clampHour(String(hour))));
 }
 
 /// Joriy public URL — webhook va mini ilova havolalari shundan quriladi.
