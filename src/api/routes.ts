@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { prisma } from '../core/db';
 import { authenticate, requireCoach, scopedGroup, AuthedRequest } from './auth';
+import { LIVE_GROUP, IN_LIVE_GROUP, isLive } from '../core/groups';
 import { MEAL_TYPES } from '../core/meals';
 import { todayIn, safeTz, lastNDates } from '../core/time';
 import { findInactive, getStats, listMembers, memberReport, listGroups, findMissingToday } from '../features/filters';
@@ -53,12 +54,14 @@ api.get('/board', wrap(async (req, res) => {
         where: {
             status: 'active',
             ...(scopeToSelf && req.member ? { id: req.member.id } : {}),
+            // Guruh JONLI bo'lishi shart — o'chirilgan guruhdan qolgan
+            // a'zolar jadvalda ko'rinmasin
             ...(g.groupId
-                ? { groups: { some: { groupId: g.groupId } } }
+                ? { groups: { some: { groupId: g.groupId, group: LIVE_GROUP } } }
                 : // Guruh murabbiysi faqat o'z guruhlarining a'zolarini ko'radi
                   req.scope.groupIds
-                  ? { groups: { some: { groupId: { in: req.scope.groupIds } } } }
-                  : {}),
+                  ? { groups: { some: { groupId: { in: req.scope.groupIds }, group: LIVE_GROUP } } }
+                  : IN_LIVE_GROUP),
         },
         include: { groups: { include: { group: true } } },
         orderBy: { joinedAt: 'asc' },
@@ -80,7 +83,7 @@ api.get('/board', wrap(async (req, res) => {
             role: m.role,
             timezone: m.timezone,
             ...(canSeeContacts ? { telegramId: m.telegramId, username: m.username } : {}),
-            groups: m.groups.map(g => ({ id: g.groupId, title: g.group.title || g.group.chatId })),
+            groups: m.groups.filter(g => isLive(g.group)).map(g => ({ id: g.groupId, title: g.group.title || g.group.chatId })),
             meals: Object.fromEntries(
                 MEAL_TYPES.map(t => {
                     const r = records.find(x => x.memberId === m.id && x.mealType === t);

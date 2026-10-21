@@ -1,7 +1,7 @@
 import { Telegraf } from 'telegraf';
 import type { Tenant } from '../generated/platform';
 import { prisma, tenantDb, dropTenantDb, vacuumTenantDb } from './db';
-import { LIVE_GROUP } from './groups';
+import { LIVE_GROUP, isLive } from './groups';
 import { encrypt, parseBotToken, randomSecret } from './crypto';
 import { registerTenant, detachTenant } from './registry';
 import { log } from './logger';
@@ -82,6 +82,41 @@ export async function deleteTenant(tenantId: string, actorTgId: string): Promise
 // ============ MA'LUMOTLARNI TOZALASH ============
 
 export type PurgeScope = 'meals' | 'members' | 'mentions' | 'outbox' | 'ai' | 'all';
+
+/// Hech qaysi jonli guruhda qolmagan a'zolar — "yetimlar".
+///
+/// Guruh o'chirilganda GroupMember qatorlari kaskad bilan ketadi, lekin
+/// Member qatori va uning butun ovqat tarixi qoladi. Ular ro'yxatlarda
+/// endi KO'RINMAYDI (IN_LIVE_GROUP sharti), lekin bazada yotaveradi.
+/// Bu funksiya ularni haqiqatan o'chiradi — faqat tugma orqali, tasdiq bilan.
+export async function listOrphanMembers(tenant: Tenant) {
+    const db = await tenantDb(tenant.botId);
+    const all = await db.member.findMany({
+        where: { role: 'member' },
+        include: { groups: { include: { group: true } } },
+        orderBy: { joinedAt: 'asc' },
+    });
+    // Murabbiy va ega hech qachon yetim hisoblanmaydi — ular guruhsiz ham kerak
+    return all.filter(m => !m.groups.some(g => isLive(g.group)));
+}
+
+export async function purgeOrphanMembers(tenant: Tenant, actorTgId: string): Promise<string> {
+    const db = await tenantDb(tenant.botId);
+    const orphans = await listOrphanMembers(tenant);
+    if (!orphans.length) return "yetim a'zo yo'q";
+
+    const ids = orphans.map(m => m.id);
+    const meals = await db.mealRecord.deleteMany({ where: { memberId: { in: ids } } });
+    await db.mention.deleteMany({ where: { memberId: { in: ids } } });
+    await db.reminderOverride.deleteMany({ where: { memberId: { in: ids } } });
+    await db.groupMember.deleteMany({ where: { memberId: { in: ids } } });
+    const removed = await db.member.deleteMany({ where: { id: { in: ids } } });
+
+    await vacuumTenantDb(tenant.botId);
+    const summary = `${removed.count} a'zo, ${meals.count} ovqat qaydi`;
+    await audit(tenant.id, actorTgId, 'data.purge.orphans', summary);
+    return summary;
+}
 
 /// Botning tanlangan ma'lumotlarini o'chirish (botning o'zi qoladi).
 export async function purgeTenantData(tenant: Tenant, scope: PurgeScope, actorTgId: string): Promise<string> {

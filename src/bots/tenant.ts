@@ -21,7 +21,7 @@ import { recordSend, pendingSummary, failedSummary } from '../features/outbox';
 import { deliverToMember, describeAttempts, CHANNEL_LABEL } from '../features/delivery';
 import { isSuperAdmin, registerIncomingGroup, markGroupLeft } from '../core/tenants';
 import { notifySuperAdmins } from '../features/notify';
-import { LIVE_GROUP, statusBadge } from '../core/groups';
+import { LIVE_GROUP, IN_LIVE_GROUP, statusBadge } from '../core/groups';
 import { scopeFor, allowsGroup, FULL_SCOPE, type Scope } from '../core/scope';
 import { getTenantState, setTenantState, clearTenantState } from './session';
 import { ask, aiAvailable, aiOffReason, clearHistory } from '../ai/agent';
@@ -357,7 +357,9 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
                 where: {
                     status: 'active',
                     role: 'member',
-                    ...(scope.groupIds ? { groups: { some: { groupId: { in: scope.groupIds } } } } : {}),
+                    ...(scope.groupIds
+                        ? { groups: { some: { groupId: { in: scope.groupIds }, group: LIVE_GROUP } } }
+                        : IN_LIVE_GROUP),
                 },
             });
             // Guruh murabbiysiga faqat o'z guruhi ko'rinayotgani aniq bo'lsin

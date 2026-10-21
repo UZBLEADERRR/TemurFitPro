@@ -11,8 +11,9 @@ import {
     createTenant, deleteTenant, pauseTenant, resumeTenant, purgeTenantData, purgeOlderThan,
     purgeGroupData, addGroup, approveGroup, rejectGroup, pendingGroups,
     isSuperAdmin, audit, TenantError, PurgeScope,
+    listOrphanMembers, purgeOrphanMembers,
 } from '../core/tenants';
-import { LIVE_GROUP, statusBadge } from '../core/groups';
+import { LIVE_GROUP, IN_LIVE_GROUP, statusBadge } from '../core/groups';
 import { getEntry, webhookUrl, tenantSpec, reconcileTenantWebhooks } from '../core/registry';
 import { getState } from '../core/webhooks';
 import { ask, aiAvailable, aiOffReason } from '../ai/agent';
@@ -147,6 +148,7 @@ function purgeMenu(id: string) {
     return Markup.inlineKeyboard([
         [Markup.button.callback('🍽 Ovqat tarixi', `s:pg:${id}:meals`)],
         [Markup.button.callback("👥 A'zolar", `s:pg:${id}:members`)],
+        [Markup.button.callback("🧍 Guruhsiz qolgan a'zolar", `s:orph:${id}`)],
         [Markup.button.callback('🔔 Eslatmalar', `s:pg:${id}:mentions`)],
         [Markup.button.callback('📭 Navbatdagi xabarlar', `s:pg:${id}:outbox`)],
         [Markup.button.callback('🗓 30 kundan eskisi', `s:pgold:${id}:30`)],
@@ -328,6 +330,47 @@ controlBot.on('callback_query', async ctx => {
                     `${link.member.name} @ ${groupId}`,
                 );
                 return showGroupCoaches(ctx, tenantId, groupId);
+            }
+
+            case 'orph': {
+                const t = await prisma.tenant.findUnique({ where: { id } });
+                if (!t) return showMain(ctx);
+                const orphans = await listOrphanMembers(t);
+                if (!orphans.length) {
+                    return reply(
+                        ctx,
+                        "✅ Guruhsiz qolgan a'zo yo'q — hammasi birorta jonli guruhda.",
+                        back(`s:purge:${id}`),
+                    );
+                }
+                const names = orphans.slice(0, 40).map(m => `• ${esc(m.name)}`);
+                return reply(
+                    ctx,
+                    [
+                        `🧍 <b>Guruhsiz qolgan a'zolar — ${orphans.length} ta</b>`,
+                        '',
+                        "Bular o'chirilgan guruhdan qolgan odamlar. Ro'yxatlarda allaqachon",
+                        "KO'RINMAYDI, lekin bazada ovqat tarixi bilan yotibdi.",
+                        '',
+                        ...names,
+                        ...(orphans.length > 40 ? [`<i>…va yana ${orphans.length - 40} ta</i>`] : []),
+                        '',
+                        "<i>O'chirsangiz ularning butun ovqat tarixi ham ketadi.</i>",
+                        '<i>Avval 💾 Zaxira olib qo\'ying.</i>',
+                    ].join('\n'),
+                    Markup.inlineKeyboard([
+                        [Markup.button.callback(`🗑 Ha, ${orphans.length} tasini o'chir`, `s:orphok:${id}`)],
+                        [Markup.button.callback('⬅️ Bekor', `s:purge:${id}`)],
+                    ]),
+                );
+            }
+
+            case 'orphok': {
+                const t = await prisma.tenant.findUnique({ where: { id } });
+                if (!t) return showMain(ctx);
+                const summary = await purgeOrphanMembers(t, String(ctx.from.id));
+                await reply(ctx, `🧹 O'chirildi: ${esc(summary)}`);
+                return showGroups(ctx, id);
             }
 
             case 'backup':
@@ -890,7 +933,7 @@ async function showTenant(ctx: Context, tenantId: string) {
     const db = await tenantDb(t.botId);
     const [groups, members, coaches, meals, pending] = await Promise.all([
         db.group.count({ where: LIVE_GROUP }),
-        db.member.count({ where: { status: 'active' } }),
+        db.member.count({ where: { status: 'active', ...IN_LIVE_GROUP } }),
         db.member.count({ where: { role: { in: ['coach', 'owner'] } } }),
         db.mealRecord.count(),
         db.outboundMessage.count({ where: { status: 'pending' } }),
@@ -997,7 +1040,7 @@ async function showOverview(ctx: Context) {
     for (const t of tenants) {
         const db = await tenantDb(t.botId);
         groups += await db.group.count({ where: LIVE_GROUP });
-        members += await db.member.count({ where: { status: 'active' } });
+        members += await db.member.count({ where: { status: 'active', ...IN_LIVE_GROUP } });
         meals += await db.mealRecord.count();
         today += await db.mealRecord.count({ where: { timeSent: { gte: since } } });
     }

@@ -15,6 +15,7 @@ import {
     pendingGroups, findTenantByHint, audit, PurgeScope,
 } from '../core/tenants';
 import { LIVE_GROUP } from '../core/groups';
+import { IN_LIVE_GROUP } from '../core/groups';
 import { getBotByTenant } from '../core/registry';
 import { MEAL_TYPES, MEAL_LABELS, isMealType, MealType } from '../core/meals';
 import { safeTz, localDateTimeToUtc, formatIn } from '../core/time';
@@ -742,7 +743,7 @@ const TOOLS: Record<string, ToolDef> = {
                         username: `@${t.botUsername}`,
                         status: t.status,
                         groups: await db.group.count({ where: LIVE_GROUP }),
-                        members: await db.member.count({ where: { status: 'active' } }),
+                        members: await db.member.count({ where: { status: 'active', ...IN_LIVE_GROUP } }),
                         meals_total: await db.mealRecord.count(),
                     };
                 }),

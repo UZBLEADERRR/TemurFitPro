@@ -104,6 +104,9 @@ export interface StatsRow {
     done: number;
     missed: number;
     late: number;
+    /// Faqat JONLI guruhlarning nomlari — reyting shular bo'yicha bo'linadi
+    groups: string[];
+    groupIds: string[];
 }
 
 export interface Stats {
@@ -121,6 +124,7 @@ export interface MemberBrief {
     status: string;
     timezone: string;
     groups: string[];
+    groupIds: string[];
 }
 
 export interface InactiveRow {

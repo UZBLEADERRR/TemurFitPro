@@ -5,11 +5,14 @@ import { haptic, openProfile } from '../lib/telegram';
 
 type Tab = 'reyting' | 'yubormaganlar';
 
-/// Yubormaganlarni guruhlar bo'yicha ajratamiz — murabbiy qaysi guruhda
+/// Qatorlarni guruhlar bo'yicha ajratamiz — murabbiy qaysi guruhda
 /// muammo borligini bir qarashda ko'radi. Bir odam bir necha guruhda bo'lsa,
 /// har birida ko'rinadi.
-function groupInactive(rows: InactiveRow[]): [string, InactiveRow[]][] {
-    const map = new Map<string, InactiveRow[]>();
+///
+/// Server faqat JONLI guruhlarning nomini yuboradi, shuning uchun o'chirilgan
+/// guruhdan qolgan odam bu yerga umuman kelmaydi.
+function byGroup<T extends { groups: string[] }>(rows: T[]): [string, T[]][] {
+    const map = new Map<string, T[]>();
     for (const r of rows) {
         for (const g of r.groups.length ? r.groups : ['Guruhsiz']) {
             if (!map.has(g)) map.set(g, []);
@@ -17,6 +20,12 @@ function groupInactive(rows: InactiveRow[]): [string, InactiveRow[]][] {
         }
     }
     return [...map.entries()].sort((a, b) => b[1].length - a[1].length);
+}
+
+/// Guruh ichidagi o'rtacha intizom — sarlavhada ko'rsatiladi
+function avgRate(rows: { rate: number }[]): number {
+    if (!rows.length) return 0;
+    return Math.round(rows.reduce((s, r) => s + r.rate, 0) / rows.length);
 }
 
 export default function Ranking({
@@ -100,32 +109,47 @@ export default function Ranking({
                     ) : !stats || stats.rows.length === 0 ? (
                         <Empty icon="📊" text="Ma'lumot yig'ilmagan" />
                     ) : (
-                        <Card tight>
-                            {stats.rows.map((r, i) => (
-                                <button
-                                    key={r.id}
-                                    className="row"
-                                    onClick={() => {
-                                        haptic();
-                                        onPick(r.id);
-                                    }}
-                                >
-                                    <span style={{ width: 18, color: 'var(--hint)', fontSize: 13, fontWeight: 600 }}>
-                                        {i + 1}
-                                    </span>
-                                    <Avatar name={r.name} />
-                                    <div className="grow">
-                                        <div className="name">{r.name}</div>
-                                        <div className={`bar ${rateClass(r.rate)}`}>
-                                            <i style={{ width: `${r.rate}%` }} />
+                        // Har bir guruh alohida karta — aralashib ketmasin
+                        byGroup(stats.rows).map(([groupName, rows]) => (
+                            <Card
+                                key={groupName}
+                                title={`${groupName} — ${rows.length} kishi · o'rtacha ${avgRate(rows)}%`}
+                                tight
+                            >
+                                {rows.map((r, i) => (
+                                    <button
+                                        key={r.id}
+                                        className="row"
+                                        onClick={() => {
+                                            haptic();
+                                            onPick(r.id);
+                                        }}
+                                    >
+                                        <span
+                                            style={{ width: 18, color: 'var(--hint)', fontSize: 13, fontWeight: 600 }}
+                                        >
+                                            {i + 1}
+                                        </span>
+                                        <Avatar name={r.name} />
+                                        <div className="grow">
+                                            <div className="name">{r.name}</div>
+                                            <div className={`bar ${rateClass(r.rate)}`}>
+                                                <i style={{ width: `${r.rate}%` }} />
+                                            </div>
                                         </div>
-                                    </div>
-                                    <span style={{ fontWeight: 700, fontSize: 14, fontVariantNumeric: 'tabular-nums' }}>
-                                        {r.rate}%
-                                    </span>
-                                </button>
-                            ))}
-                        </Card>
+                                        <span
+                                            style={{
+                                                fontWeight: 700,
+                                                fontSize: 14,
+                                                fontVariantNumeric: 'tabular-nums',
+                                            }}
+                                        >
+                                            {r.rate}%
+                                        </span>
+                                    </button>
+                                ))}
+                            </Card>
+                        ))
                     )}
                 </>
             ) : (
@@ -160,7 +184,7 @@ export default function Ranking({
                                 {group ? 'Bu guruhda' : "Barcha guruhlar bo'ylab"} — jami{' '}
                                 <b>{inactive.length}</b> kishi · <i>ismga bosing → Telegram profili</i>
                             </p>
-                            {groupInactive(inactive).map(([groupName, rows]) => (
+                            {byGroup(inactive).map(([groupName, rows]) => (
                                 <Card key={groupName} title={`${groupName} — ${rows.length}`} tight>
                                     {rows.map(r => (
                                         <div key={r.id} className="row">

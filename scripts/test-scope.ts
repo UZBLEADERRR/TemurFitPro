@@ -149,6 +149,65 @@ async function main() {
     check('22 tasdiqlanmagan guruh murabbiy doirasiga kirmaydi',
         !ids.includes(kutayotgan.id) && ids.includes(kechki.id), ids.join(','));
 
+    // ---------- YETIM A'ZOLAR ----------
+    // Aynan ekrandagi muammo: guruh o'chirilgan, lekin a'zolari
+    // reytingda 0% bo'lib ko'rinib turardi.
+    const eskiGuruh = await db.group.create({
+        data: { chatId: '-100999', title: 'Eski guruh', status: 'approved' },
+    });
+    const yetim = await db.member.create({
+        data: { telegramId: '99', name: 'Sarvar GPT', nameLc: 'sarvar gpt' },
+    });
+    await db.groupMember.create({ data: { groupId: eskiGuruh.id, memberId: yetim.id } });
+
+    const oldin = await getStats(db, tenant, { days: 7 });
+    check('23 guruh tirik ekan — a\'zosi reytingda bor', oldin.rows.some((r: any) => r.name === 'Sarvar GPT'));
+
+    // Guruhni o'chiramiz (GroupMember kaskad bilan ketadi, Member qoladi)
+    await db.group.delete({ where: { id: eskiGuruh.id } });
+    check('24 falokat haqiqiy — a\'zo bazada qoldi',
+        !!(await db.member.findUnique({ where: { telegramId: '99' } })));
+
+    const keyin = await getStats(db, tenant, { days: 7 });
+    check('25 o\'chirilgan guruh a\'zosi REYTINGDA KO\'RINMAYDI',
+        !keyin.rows.some((r: any) => r.name === 'Sarvar GPT'),
+        keyin.rows.map((r: any) => r.name).join(','));
+
+    const royxat = await listMembers(db, {});
+    check('26 a\'zolar ro\'yxatida ham yo\'q', !royxat.some((m: any) => m.name === 'Sarvar GPT'));
+
+    const qidiruvYetim = await searchMembers(db, 'sarvar', null);
+    check('27 qidiruvda ham topilmaydi', qidiruvYetim.length === 0);
+
+    const missYetim = await findMissingToday(db, {});
+    check('28 "yubormaganlar"ga ham tushmaydi', !missYetim.some((r: any) => r.name === 'Sarvar GPT'));
+
+    // ---------- Bot chiqarilgan guruh ham xuddi shunday ----------
+    await db.group.update({ where: { chatId: '-100222' }, data: { isActive: false } });
+    const chiqarilgan = await getStats(db, tenant, { days: 7 });
+    check('29 bot chiqarilgan guruh a\'zosi ham ko\'rinmaydi',
+        !chiqarilgan.rows.some((r: any) => r.name === 'Jasur'),
+        chiqarilgan.rows.map((r: any) => r.name).join(','));
+    await db.group.update({ where: { chatId: '-100222' }, data: { isActive: true } });
+
+    // ---------- Guruh yorliqlari ----------
+    const hammasi = await getStats(db, tenant, { days: 7 });
+    check('30 har bir qatorda guruh nomi bor (guruhlab ko\'rsatish uchun)',
+        hammasi.rows.every((r: any) => Array.isArray(r.groups) && r.groups.length > 0),
+        JSON.stringify(hammasi.rows.map((r: any) => [r.name, r.groups])));
+
+    // ---------- Tozalash ----------
+    const { listOrphanMembers, purgeOrphanMembers } = require('../src/core/tenants');
+    const yetimlar = await listOrphanMembers(tenant);
+    check('31 yetim a\'zo topildi', yetimlar.length === 1 && yetimlar[0].name === 'Sarvar GPT',
+        yetimlar.map((m: any) => m.name).join(','));
+
+    await purgeOrphanMembers(tenant, '1');
+    check('32 tozalashdan keyin bazada ham yo\'q',
+        !(await db.member.findUnique({ where: { telegramId: '99' } })));
+    check('33 tozalash boshqa a\'zolarga tegmadi', (await db.member.count()) === 5,
+        `${await db.member.count()}`);
+
     console.log(`\nHAMMASI O'TDI (${passed})`);
     await prisma.$disconnect();
     fs.rmSync(dir, { recursive: true, force: true });

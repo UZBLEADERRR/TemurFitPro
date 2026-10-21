@@ -3,7 +3,7 @@ import type { TenantClient } from '../core/db';
 import { MEAL_TYPES, MEAL_LABELS, MealType } from '../core/meals';
 import { todayIn, lastNDates, daysAgoIn, safeTz, formatIn } from '../core/time';
 import { esc } from '../core/telegram';
-import { LIVE_GROUP } from '../core/groups';
+import { LIVE_GROUP, IN_LIVE_GROUP, isLive } from '../core/groups';
 
 export interface MemberBrief {
     id: string;
@@ -13,7 +13,10 @@ export interface MemberBrief {
     role: string;
     status: string;
     timezone: string;
+    /// Faqat JONLI guruhlarning nomlari
     groups: string[];
+    /// Shu nomlarga mos id lar — mijoz tomonda guruhlab ko'rsatish uchun
+    groupIds: string[];
 }
 
 export interface InactiveRow extends MemberBrief {
@@ -38,7 +41,7 @@ type MemberWithGroups = {
     role: string;
     status: string;
     timezone: string;
-    groups: { group: { title: string; chatId: string } }[];
+    groups: { group: { id: string; title: string; chatId: string; isActive: boolean; status: string } }[];
 };
 
 function brief(m: MemberWithGroups): MemberBrief {
@@ -50,7 +53,9 @@ function brief(m: MemberWithGroups): MemberBrief {
         role: m.role,
         status: m.status,
         timezone: m.timezone,
-        groups: m.groups.map(g => g.group.title || g.group.chatId),
+        // O'chirilgan/chiqarilgan guruh nomi yorliqlarda ko'rinmasin
+        groups: m.groups.filter(g => isLive(g.group)).map(g => g.group.title || g.group.chatId),
+        groupIds: m.groups.filter(g => isLive(g.group)).map(g => g.group.id),
     };
 }
 
@@ -63,9 +68,12 @@ const withGroups = { groups: { include: { group: true } } } as const;
 ///            Guruh murabbiysi boshqa guruhning a'zolarini ko'rmasligi uchun
 ///            bu cheklov HAR BIR so'rovda qo'llanadi.
 function groupScope(groupId?: string | null, allowed?: string[] | null) {
-    if (groupId) return { groups: { some: { groupId } } };
-    if (allowed) return { groups: { some: { groupId: { in: allowed } } } };
-    return {};
+    // Har uchala holatda ham guruh JONLI bo'lishi shart.
+    // Busiz o'chirilgan guruhdan qolgan a'zolar ro'yxatlarda 0% bo'lib
+    // ko'rinib turardi — guruh yo'q bo'lsa ham odam bazada qolaveradi.
+    if (groupId) return { groups: { some: { groupId, group: LIVE_GROUP } } };
+    if (allowed) return { groups: { some: { groupId: { in: allowed }, group: LIVE_GROUP } } };
+    return IN_LIVE_GROUP;
 }
 
 /// Barcha saralash funksiyalari uchun umumiy parametrlar
@@ -247,6 +255,7 @@ export async function searchMembers(
     const q = query.trim();
     if (!q) return [];
     const lc = q.toLowerCase();
+    // Qidiruvda ham yetim a'zolar chiqmasin
     const scope = groupScope(null, allowedGroupIds);
     const members = await db.member.findMany({
         where: { OR: [{ nameLc: { contains: lc } }, { telegramId: q }], ...scope },
@@ -303,19 +312,31 @@ export function formatInactive(rows: InactiveRow[], days: number, totalGroups: n
 
 export function formatStats(res: { rows: StatsRow[]; days: number; from: string; to: string }): string {
     if (res.rows.length === 0) return "A'zolar topilmadi.";
-    const lines = res.rows.map((r, i) => {
-        const bar = '█'.repeat(Math.round(r.rate / 10)).padEnd(10, '░');
-        return `${String(i + 1).padStart(2)}. <code>${bar}</code> ${r.rate}% — ${esc(r.name)}`;
-    });
-    const avg = Math.round(res.rows.reduce((s, r) => s + r.rate, 0) / res.rows.length);
-    return [
-        `📊 <b>Intizom reytingi — ${res.days} kun</b>`,
-        `<i>${res.from} … ${res.to}</i>`,
-        '',
-        ...lines,
-        '',
-        `O'rtacha: <b>${avg}%</b>`,
-    ].join('\n');
+
+    // Har bir guruh alohida bo'lim — aralashib ketmasin.
+    // Bir odam ikki guruhda bo'lsa ikkalasida ham ko'rinadi.
+    const byGroup = new Map<string, StatsRow[]>();
+    for (const r of res.rows) {
+        for (const g of r.groups.length ? r.groups : ['Guruhsiz']) {
+            if (!byGroup.has(g)) byGroup.set(g, []);
+            byGroup.get(g)!.push(r);
+        }
+    }
+
+    const avgOf = (rows: StatsRow[]) => Math.round(rows.reduce((s, r) => s + r.rate, 0) / rows.length);
+    const bar = (rate: number) => '█'.repeat(Math.round(rate / 10)).padEnd(10, '░');
+
+    const out: string[] = [`📊 <b>Intizom reytingi — ${res.days} kun</b>`, `<i>${res.from} … ${res.to}</i>`];
+
+    for (const [groupName, rows] of [...byGroup.entries()].sort((a, b) => b[1].length - a[1].length)) {
+        out.push('', `<b>${esc(groupName)}</b> — ${rows.length} kishi · o'rtacha ${avgOf(rows)}%`);
+        rows.forEach((r, i) => {
+            out.push(`${String(i + 1).padStart(2)}. <code>${bar(r.rate)}</code> ${r.rate}% — ${esc(r.name)}`);
+        });
+    }
+
+    out.push('', `Umumiy o'rtacha: <b>${avgOf(res.rows)}%</b>`);
+    return out.join('\n');
 }
 
 /// Bugun yubormaganlar — guruhlar bo'yicha, qaysi ovqat yetishmayotgani bilan
