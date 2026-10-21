@@ -26,6 +26,10 @@ CREATE TABLE "Member" (
     "longitude" REAL,
     "dmOpen" BOOLEAN NOT NULL DEFAULT false,
     "note" TEXT NOT NULL DEFAULT '',
+    "breakfastTime" TEXT,
+    "lunchTime" TEXT,
+    "dinnerTime" TEXT,
+    "setupDone" BOOLEAN NOT NULL DEFAULT false,
     "joinedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL
 );
@@ -79,6 +83,17 @@ CREATE TABLE "ReminderOverride" (
     "muted" BOOLEAN NOT NULL DEFAULT true,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "ReminderOverride_memberId_fkey" FOREIGN KEY ("memberId") REFERENCES "Member" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+-- CreateTable
+CREATE TABLE "Milestone" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "memberId" TEXT NOT NULL,
+    "groupId" TEXT NOT NULL,
+    "day" INTEGER NOT NULL,
+    "sentAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "Milestone_memberId_fkey" FOREIGN KEY ("memberId") REFERENCES "Member" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "Milestone_groupId_fkey" FOREIGN KEY ("groupId") REFERENCES "Group" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 -- CreateTable
@@ -172,6 +187,12 @@ CREATE UNIQUE INDEX "Mention_groupId_memberId_mealType_date_key" ON "Mention"("g
 
 -- CreateIndex
 CREATE UNIQUE INDEX "ReminderOverride_memberId_mealType_key" ON "ReminderOverride"("memberId", "mealType");
+
+-- CreateIndex
+CREATE INDEX "Milestone_groupId_idx" ON "Milestone"("groupId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Milestone_memberId_groupId_day_key" ON "Milestone"("memberId", "groupId", "day");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "BusinessConnection_connectionId_key" ON "BusinessConnection"("connectionId");

@@ -2,7 +2,7 @@ import type { Context } from 'telegraf';
 import type { Tenant } from '../generated/platform';
 import type { Member, Group } from '../generated/tenant';
 import type { TenantClient } from '../core/db';
-import { detectMealType, mealTargetMinutes, MEAL_LABELS, MealType } from '../core/meals';
+import { detectMealType, mealTargetMinutes, mealTimesFor, MEAL_LABELS, MealType } from '../core/meals';
 import { todayIn, daysAgoIn, localMinutes, hhmmToMinutes, safeTz } from '../core/time';
 import { refreshTablesForMember } from './table';
 import { getBotByTenant } from '../core/registry';
@@ -27,8 +27,9 @@ export async function recordMeal(
     const tz = safeTz(member.timezone);
     let date = todayIn(tz);
     const nowMin = localMinutes(tz);
-    const targetMin = mealTargetMinutes(tenant, meal);
-    const breakfastMin = hhmmToMinutes(tenant.breakfastTime);
+    // A'zoning SHAXSIY vaqtlari bo'lsa o'shalar ishlatiladi
+    const targetMin = mealTargetMinutes(tenant, meal, member);
+    const breakfastMin = hhmmToMinutes(mealTimesFor(tenant, member).nonushta);
 
     let status: 'on_time' | 'late' = 'on_time';
 

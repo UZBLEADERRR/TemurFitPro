@@ -54,6 +54,11 @@ model Tenant {
   requirePhoto        Boolean @default(true)
   autoDeleteReminders Boolean @default(true)
 
+  /// Har necha kunda bosqich tabrigi yuborilsin (0 = o'chirilgan)
+  milestoneEvery Int @default(10)
+  /// Tabrik a'zoning mahalliy vaqti bilan qaysi soatda ketsin
+  milestoneHour Int @default(10)
+
   breakfastWords String @default("nonushta,#nonushta,ertalabki")
   lunchWords     String @default("tushlik,#tushlik,abed,#abed,obed")
   dinnerWords    String @default("kechki,#kechki,kechki_ovqat,#kechki_ovqat,uzhin")

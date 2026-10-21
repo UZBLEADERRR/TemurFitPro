@@ -45,6 +45,7 @@ model Group {
   members     GroupMember[]
   mealRecords MealRecord[]
   mentions    Mention[]
+  milestones  Milestone[]
 
   @@index([isActive, status])
 }
@@ -63,6 +64,18 @@ model Member {
   dmOpen     Boolean @default(false)
   note       String  @default("")
 
+  /// SHAXSIY ovqat vaqtlari ("HH:mm"). null bo'lsa botning umumiy vaqti.
+  ///
+  /// Koreyadagi a'zo bilan O'zbekistondagi a'zoning kun tartibi bir xil emas.
+  /// Vaqt mintaqasi lokatsiyadan aniqlanadi, vaqtlarni esa odamning o'zi
+  /// tanlaydi — eslatma ham, "kech qoldi" hisobi ham shularga qarab ishlaydi.
+  breakfastTime String?
+  lunchTime     String?
+  dinnerTime    String?
+
+  /// Boshlang'ich sozlash (lokatsiya + 3 ta vaqt) tugatilganmi
+  setupDone Boolean @default(false)
+
   joinedAt  DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -71,6 +84,7 @@ model Member {
   mentions          Mention[]
   reminderOverrides ReminderOverride[]
   outbox            OutboundMessage[]
+  milestones        Milestone[]
 
   @@index([role])
   @@index([status])
@@ -142,6 +156,26 @@ model ReminderOverride {
   createdAt DateTime @default(now())
 
   @@unique([memberId, mealType])
+}
+
+/// Yuborilgan bosqich tabriklari ("10 kun tugadi", "20 kun tugadi"...).
+///
+/// Nega jadval kerak: tabrik kuniga bir marta emas, BOSQICHGA bir marta
+/// ketishi kerak. Scheduler har soat ishlaydi, shuning uchun yuborilganini
+/// bazada belgilamasak odam bir kunda bir necha marta tabrik olardi.
+model Milestone {
+  id       String @id @default(cuid())
+  memberId String
+  member   Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  groupId  String
+  group    Group  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  /// Nechanchi kun (10, 20, 30...)
+  day    Int
+  sentAt DateTime @default(now())
+
+  @@unique([memberId, groupId, day])
+  @@index([groupId])
 }
 
 /// Murabbiy botni o'z Telegram Business akkauntiga ulaganda saqlanadi.

@@ -23,6 +23,8 @@ platformaga aylandi.
 | Mini ilova | Bitta ekran, auth yo'q | 4 ekran, initData HMAC imzosi |
 | Sozlash | 6 ta env o'zgaruvchisi | Railway'da 2 ta, qolgani bot ichida |
 | Murabbiy doirasi | Butun bot | Global yoki faqat bitta guruh |
+| Ovqat vaqtlari | Butun bot uchun bitta | Har bir a'zo o'ziniki tanlaydi |
+| Bosqich tabriklari | Yo'q | Har 10 kunda guruhga, natija bilan |
 | Zaxira | Yo'q | Har kuni fayl, bir tugma bilan tiklash |
 
 ---
@@ -261,6 +263,27 @@ keladi. Barcha holatni **📮 Xabarlar holati** tugmasidan ko'rasiz.
 
 ## A'zolar uchun
 
+### Birinchi marta: bir daqiqalik sozlash
+
+Botga `/start` bosilganda yangi a'zodan ikki narsa so'raladi:
+
+1. **Joylashuv** — vaqt mintaqasi avtomatik aniqlanadi (koordinata saqlanmaydi,
+   faqat mintaqa). Yubormasa botning umumiy mintaqasi ishlatiladi.
+2. **Uchta vaqt** — nonushta, tushlik va kechki ovqat uchun o'ziga qulay soat.
+   Tayyor variantlardan tanlaydi yoki o'zi yozadi (`8`, `08:30`, `20.15` —
+   hammasi tushuniladi). "Standart vaqtda qolsin" desa botning umumiy vaqti
+   qoladi.
+
+Shundan keyin eslatma ham, "kech qoldi" hisobi ham **shu odamning o'z
+vaqtlariga** qarab ishlaydi. Koreyadagi a'zo nonushtani 06:30 da, Toshkentdagi
+08:00 da qilsa — ikkalasi bitta guruhda bo'lsa ham har biri o'z vaqtida eslatma
+oladi.
+
+Keyin o'zgartirish: menyudagi ⏰ **Mening vaqtlarim**, yoki `/vaqt`.
+Sozlashdan chiqish: `/menu`.
+
+### Kundalik ish
+
 Guruhga ovqat rasmini hashtag bilan yuborish:
 
 `#nonushta` · `#tushlik` · `#kechki`
@@ -268,11 +291,16 @@ Guruhga ovqat rasmini hashtag bilan yuborish:
 Kalit so'zlarni murabbiy o'zgartirishi mumkin. Bot javob beradi, pinlangan
 jadvalni yangilaydi va o'sha ovqat uchun yuborilgan eslatmani guruhdan o'chiradi.
 
-**Vaqt mintaqasi.** Har bir a'zo o'z mahalliy vaqtida hisoblanadi — Koreyadagi
-va O'zbekistondagi a'zolar bitta guruhda to'g'ri ko'rinadi. Botga lokatsiya
-yuborsangiz mintaqa avtomatik aniqlanadi.
-
 Yarim tundan keyin yuborilgan kechki ovqat kechagi kunga yoziladi.
+
+### Bosqich tabriklari
+
+Har **10 kunda** (sozlanadi) bot guruhga tabrik tashlaydi: nechanchi kun
+tugagani, o'sha bosqichda nechta ovqat yuborilgani va motivatsion gap.
+Kun hisobi odam **guruhga qo'shilgan kundan** boshlanadi, tabrik esa uning
+mahalliy vaqti bilan belgilangan soatda (standart 10:00) ketadi.
+
+Murabbiy ⚙️ Sozlamalar dan oraliqni (0 = o'chirish) va soatni o'zgartiradi.
 
 ---
 
@@ -318,6 +346,7 @@ Har bir daraja uchun alohida tugma — SQL yozish shart emas:
 | Nima | Qayerda | Natija |
 |---|---|---|
 | Bitta guruh | Bot → 🏠 Guruhlar → guruh → 🧹 | O'sha guruh tarixi va faqat undagi a'zolar |
+| Guruhsiz qolganlar | Ona bot → bot → 🧹 Tozalash → 🧍 | O'chirilgan guruhdan qolgan a'zolar va ularning tarixi |
 | Ovqat tarixi | Ona bot → bot → 🧹 Tozalash | Butun bot bo'yicha ovqat qaydlari |
 | A'zolar | Ona bot → bot → 🧹 Tozalash | Oddiy a'zolar (murabbiylar qoladi) |
 | 30/90 kundan eskisi | Ona bot → bot → 🧹 Tozalash | Faqat eski yozuvlar |
@@ -332,7 +361,8 @@ Har bir tozalashdan keyin `VACUUM` ishlaydi — bo'shagan joy diskka qaytadi.
 Bot tugmasi orqali ochiladi. Telegram mavzusiga moslashadi (yorug'/qorong'i).
 
 - **Bugun** — kunlik jadval, sana bo'yicha o'tish, a'zoga bosib 14 kunlik tarix
-- **Reyting** — intizom foizi va yubormaganlar (guruhlar bo'yicha bo'lingan)
+- **Reyting** — intizom foizi va yubormaganlar, **har bir guruh alohida karta**
+  (o'z o'rtachasi bilan); o'chirilgan guruhdan qolgan odamlar ko'rinmaydi
 - **A'zolar** — qidiruv, guruhlar
 - **Sozlash** — vaqtlar, eslatmalar, kalit so'zlar
 
@@ -403,7 +433,7 @@ src/
     settings.ts           Bot ichidan qo'yiladigan sozlamalar (Gemini, URL, zaxira)
     scope.ts              Kim qaysi guruhni ko'radi (guruh murabbiysi)
     time.ts               Per-user timezone hisoblari
-    meals.ts              Ovqat turlari va aniqlash
+    meals.ts              Ovqat turlari, aniqlash va vaqtlar (shaxsiy/umumiy)
     roles.ts              Rol yordamchilari
   bots/
     control.ts            Ona bot — super admin paneli
@@ -411,6 +441,8 @@ src/
     ui.ts, session.ts     Inline klaviaturalar, dialog holati
   features/
     recording.ts          Rasm → ovqat qaydi
+    onboarding.ts         Boshlang'ich sozlash: mintaqa + 3 ta vaqt
+    milestone.ts          "10 kun tugadi!" tabriklari
     table.ts              Pinlangan jadval
     filters.ts            Saralash va statistika (guruhlar bo'yicha)
     business.ts           Telegram Business orqali yuborish

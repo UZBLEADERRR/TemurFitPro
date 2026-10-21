@@ -29,7 +29,10 @@ export function coachMenu(tenantId: string, agentName?: string) {
 export function memberMenu(tenantId: string) {
     const rows: any[] = [
         [Markup.button.callback('📊 Mening natijam', 'm:me')],
-        [Markup.button.callback('🔔 Eslatmalar', 'm:reminders')],
+        [
+            Markup.button.callback('⏰ Mening vaqtlarim', 'm:times'),
+            Markup.button.callback('🔔 Eslatmalar', 'm:reminders'),
+        ],
     ];
     const url = webappUrl(tenantId);
     if (url) rows.push([Markup.button.webApp('📱 Mini ilova', url)]);
@@ -73,6 +76,8 @@ export function settingsMenu(
         maxReminders: number;
         requirePhoto: boolean;
         agentName: string;
+        milestoneEvery: number;
+        milestoneHour: number;
     },
     aiOn = false,
 ) {
@@ -85,6 +90,13 @@ export function settingsMenu(
             Markup.button.callback(`🔁 Maks — ${t.maxReminders}`, 'c:set:maxReminders'),
         ],
         [Markup.button.callback(`📷 Rasm majburiy: ${t.requirePhoto ? 'ha' : "yo'q"}`, 'c:toggle:requirePhoto')],
+        [
+            Markup.button.callback(
+                t.milestoneEvery > 0 ? `🎉 Tabrik — har ${t.milestoneEvery} kun` : "🎉 Tabrik — o'chiq",
+                'c:set:milestoneEvery',
+            ),
+            Markup.button.callback(`🕐 ${String(t.milestoneHour).padStart(2, '0')}:00`, 'c:set:milestoneHour'),
+        ],
         ...(aiOn
             ? [
                   [Markup.button.callback(`🤖 AI ismi — ${t.agentName}`, 'c:set:agentName')],

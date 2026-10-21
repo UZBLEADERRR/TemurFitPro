@@ -16,6 +16,12 @@ ALTER TABLE "Group" ADD COLUMN "approvedBy" TEXT;
 -- 2026-09: har bir guruhga alohida murabbiy tayinlash
 ALTER TABLE "GroupMember" ADD COLUMN "role" TEXT NOT NULL DEFAULT 'member';
 
+-- 2026-10: a'zoning shaxsiy ovqat vaqtlari va boshlang'ich sozlash
+ALTER TABLE "Member" ADD COLUMN "breakfastTime" TEXT;
+ALTER TABLE "Member" ADD COLUMN "lunchTime" TEXT;
+ALTER TABLE "Member" ADD COLUMN "dinnerTime" TEXT;
+ALTER TABLE "Member" ADD COLUMN "setupDone" BOOLEAN NOT NULL DEFAULT false;
+
 -- ESLATMA: bu yerga faqat ALTER TABLE yozing.
 -- Ma'lumotni to'ldirish (backfill) kerak bo'lsa src/core/db.ts dagi
 -- AFTER_COLUMN_ADDED ga qo'shing — u ustun HAQIQATAN qo'shilgandagina

@@ -8,7 +8,7 @@ import { prisma, tenantDb } from '../core/db';
 import { log } from '../core/logger';
 import { esc, chunkText, tgError } from '../core/telegram';
 import { safeTz } from '../core/time';
-import { MEAL_LABELS, MEAL_TYPES, isMealType, type MealType } from '../core/meals';
+import { MEAL_LABELS, MEAL_TYPES, isMealType, mealTimesFor, hasOwnTimes, type MealType } from '../core/meals';
 import { isCoachRole } from '../core/roles';
 import { handleGroupMeal } from '../features/recording';
 import { renderTable, updateGroupTable } from '../features/table';
@@ -23,6 +23,11 @@ import { isSuperAdmin, registerIncomingGroup, markGroupLeft } from '../core/tena
 import { notifySuperAdmins } from '../features/notify';
 import { LIVE_GROUP, IN_LIVE_GROUP, statusBadge } from '../core/groups';
 import { scopeFor, allowsGroup, FULL_SCOPE, type Scope } from '../core/scope';
+import {
+    SETUP_LOCATION, SETUP_TIME, locationPrompt,
+    askTime, saveTime, finishSetup, setupSummary, parseTypedTime, nextMeal, timeKeyboard, unpackTime,
+    locationKeyboard,
+} from '../features/onboarding';
 import { getTenantState, setTenantState, clearTenantState } from './session';
 import { ask, aiAvailable, aiOffReason, clearHistory } from '../ai/agent';
 import type { Role } from '../core/roles';
@@ -121,13 +126,34 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
             member = await db.member.update({ where: { id: member.id }, data: { dmOpen: true } });
         }
 
+        // Hali sozlamagan oddiy a'zoni boshlang'ich sozlashga olib kiramiz.
+        // Murabbiyga bu kerak emas — unga darrov panel ochiladi.
+        if (!member.setupDone && member.role === 'member') {
+            await setTenantState(tenant.botId, String(ctx.chat.id), SETUP_LOCATION, {});
+            await ctx
+                .reply(locationPrompt(tenant), { parse_mode: 'HTML', ...locationKeyboard() })
+                .catch(() => undefined);
+            return;
+        }
+
         await showMenu(ctx, tenant, db, member, true);
+    });
+
+    /// Sozlashni qaytadan ochish
+    bot.command('vaqt', async ctx => {
+        if (ctx.chat.type !== 'private') return;
+        const ctxData = await load();
+        if (!ctxData) return;
+        const member = await ctxData.db.member.findUnique({ where: { telegramId: String(ctx.from.id) } });
+        if (member) await startTimeSetup(ctx, ctxData.tenant, ctxData.db, member);
     });
 
     bot.command('menu', async ctx => {
         if (ctx.chat.type !== 'private') return;
         const ctxData = await load();
         if (!ctxData) return;
+        // Yarim qolgan sozlashdan chiqish yo'li — odam qamalib qolmasin
+        await clearTenantState(ctxData.tenant.botId, String(ctx.chat.id));
         const member = await ctxData.db.member.findUnique({ where: { telegramId: String(ctx.from.id) } });
         if (member) await showMenu(ctx, ctxData.tenant, ctxData.db, member, false);
     });
@@ -194,7 +220,11 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
                 }
                 await handleCoachAction(ctx, tenant, db, scope, action, arg, extra);
             } else if (ns === 'm') {
-                await handleMemberAction(ctx, db, member, action);
+                if (action === 'time' && arg && isMealType(arg)) {
+                    await handleSetupTime(ctx, tenant, db, member, arg, extra ?? 'skip');
+                } else {
+                    await handleMemberAction(ctx, tenant, db, member, action);
+                }
             }
         } catch (e) {
             log.error('tenant-bot', `callback xatosi (${data})`, e);
@@ -280,6 +310,18 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
         if (!member) return;
 
         const session = await getTenantState(tenant.botId, String(ctx.chat.id));
+
+        // Lokatsiya so'ralgan paytda "Keyinroq" bosilsa — mintaqasiz davom etamiz
+        if (session.state === SETUP_LOCATION) {
+            if (/keyinroq|⏭/i.test(text)) {
+                await ctx.reply('✅ Yaxshi.', Markup.removeKeyboard()).catch(() => undefined);
+                await askTime(ctx, tenant, member, 'nonushta', reply);
+                return;
+            }
+        }
+
+        if (session.state === SETUP_TIME && (await handleTypedTime(ctx, tenant, db, text))) return;
+
         if (session.state.startsWith('await:')) {
             await handleAwaitedInput(ctx, tenant, db, session.state.slice(6), text, session.payload);
             return;
@@ -317,10 +359,78 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
             data: { latitude: loc.latitude, longitude: loc.longitude, timezone },
         });
         await ctx.reply(
-            `✅ Vaqt mintaqangiz aniqlandi: <b>${timezone}</b>\n\nEndi eslatmalar mahalliy vaqtingizda keladi.`,
+            `✅ Vaqt mintaqangiz aniqlandi: <b>${timezone}</b>`,
             { parse_mode: 'HTML', ...Markup.removeKeyboard() },
         );
+
+        // Sozlash oqimidamizmi — unda vaqt tanlashga o'tamiz
+        const st = await getTenantState(ctxData.tenant.botId, String(ctx.chat.id));
+        if (st.state === SETUP_LOCATION) {
+            const fresh = await ctxData.db.member.findUnique({ where: { id: member.id } });
+            if (fresh) await askTime(ctx, ctxData.tenant, fresh, 'nonushta', reply);
+        }
     });
+
+    // ================= BOSHLANG'ICH SOZLASH =================
+
+    /// Vaqt tanlashni boshidan ochish (/vaqt yoki menyudagi tugma)
+    async function startTimeSetup(ctx: Context, tenant: Tenant, db: TenantClient, member: Member) {
+        await askTime(ctx, tenant, member, 'nonushta', reply);
+    }
+
+    /// "s:time:<meal>:<HH:mm|skip>" tugmasi
+    async function handleSetupTime(
+        ctx: Context,
+        tenant: Tenant,
+        db: TenantClient,
+        member: Member,
+        meal: MealType,
+        raw: string,
+    ) {
+        // Tugmadan "0800" keladi, qo'lda yozilgandan "08:00"
+        const value = raw === 'skip' ? null : raw.includes(':') ? raw : unpackTime(raw);
+        let fresh = await saveTime(db, member.id, meal, value);
+
+        const next = nextMeal(meal);
+        if (next) {
+            await askTime(ctx, tenant, fresh, next, reply);
+            return;
+        }
+
+        await clearTenantState(tenant.botId, String(ctx.chat!.id));
+        fresh = await finishSetup(db, fresh.id);
+        await reply(ctx, setupSummary(tenant, fresh), memberMenu(tenant.id));
+    }
+
+    /// Qo'lda yozilgan vaqt ("8", "08:30", "20.15"...)
+    async function handleTypedTime(ctx: Context, tenant: Tenant, db: TenantClient, text: string): Promise<boolean> {
+        const chatId = String(ctx.chat!.id);
+        const st = await getTenantState(tenant.botId, chatId);
+        if (st.state !== SETUP_TIME) return false;
+
+        const meal = String(st.payload.meal) as MealType;
+        if (!isMealType(meal)) {
+            await clearTenantState(tenant.botId, chatId);
+            return false;
+        }
+
+        const member = await db.member.findUnique({ where: { telegramId: String(ctx.from!.id) } });
+        if (!member) return false;
+
+        const parsed = parseTypedTime(text);
+        if (!parsed) {
+            await reply(
+                ctx,
+                "⌚️ Vaqtni tushunmadim. <code>08:30</code> ko'rinishida yozing, tugmadan tanlang, " +
+                    "yoki /menu bosib keyinroq sozlang.",
+                timeKeyboard(meal),
+            );
+            return true;
+        }
+
+        await handleSetupTime(ctx, tenant, db, member, meal, parsed);
+        return true;
+    }
 
     // ================= YORDAMCHILAR =================
 
@@ -670,7 +780,54 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
         }
     }
 
-    async function handleMemberAction(ctx: Context, db: TenantClient, member: Member, action: string) {
+    async function handleMemberAction(
+        ctx: Context,
+        tenant: Tenant,
+        db: TenantClient,
+        member: Member,
+        action: string,
+    ) {
+        if (action === 'times') {
+            const times = mealTimesFor(tenant, member);
+            await reply(
+                ctx,
+                [
+                    '⏰ <b>Mening vaqtlarim</b>',
+                    '',
+                    `🌍 Mintaqa: <b>${esc(member.timezone)}</b>`,
+                    `🌅 ${MEAL_LABELS.nonushta}: <b>${esc(times.nonushta)}</b>`,
+                    `🌞 ${MEAL_LABELS.tushlik}: <b>${esc(times.tushlik)}</b>`,
+                    `🌙 ${MEAL_LABELS.kechki}: <b>${esc(times.kechki)}</b>`,
+                    '',
+                    hasOwnTimes(member)
+                        ? '<i>Bu — sizning shaxsiy vaqtlaringiz.</i>'
+                        : "<i>Hozir botning umumiy vaqtlari. O'zingiznikini qo'ysangiz eslatma shunga qarab keladi.</i>",
+                ].join('\n'),
+                Markup.inlineKeyboard([
+                    [Markup.button.callback("⏰ Vaqtlarni o'zgartirish", 'm:settime')],
+                    [Markup.button.callback('📍 Mintaqani yangilash', 'm:settz')],
+                    [Markup.button.callback('⬅️ Orqaga', 'm:menu')],
+                ]),
+            );
+            return;
+        }
+
+        if (action === 'settime') {
+            await startTimeSetup(ctx, tenant, db, member);
+            return;
+        }
+
+        if (action === 'settz') {
+            await setTenantState(tenant.botId, String(ctx.chat!.id), SETUP_LOCATION, {});
+            await ctx
+                .reply(
+                    '📍 Joylashuvingizni yuboring — mintaqangizni yangilayman.',
+                    { parse_mode: 'HTML', ...locationKeyboard() } as any,
+                )
+                .catch(() => undefined);
+            return;
+        }
+
         if (action === 'me') {
             const rep = await memberReport(db, member.id, 7);
             if (!rep) return;
@@ -711,8 +868,7 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
         }
 
         if (action === 'menu') {
-            const t = await loadTenant();
-            if (t) await reply(ctx, '📋 <b>Menyu</b>', memberMenu(t.id));
+            await reply(ctx, '📋 <b>Menyu</b>', memberMenu(tenant.id));
         }
     }
 
@@ -789,9 +945,20 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
             data.agentName = text.slice(0, 40);
         } else if (field === 'coachStyle') {
             data.coachStyle = text.slice(0, 2000);
-        } else if (field === 'reminderInterval' || field === 'maxReminders') {
+        } else if (
+            field === 'reminderInterval' ||
+            field === 'maxReminders' ||
+            field === 'milestoneEvery' ||
+            field === 'milestoneHour'
+        ) {
             const n = Number(text);
-            const [min, max] = field === 'reminderInterval' ? [5, 1440] : [0, 20];
+            const ranges: Record<string, [number, number]> = {
+                reminderInterval: [5, 1440],
+                maxReminders: [0, 20],
+                milestoneEvery: [0, 100],
+                milestoneHour: [0, 23],
+            };
+            const [min, max] = ranges[field];
             if (!Number.isFinite(n) || n < min || n > max) {
                 await reply(ctx, `❌ ${min}..${max} oralig'ida son kiriting.`);
                 return;
@@ -956,6 +1123,11 @@ function settingsText(t: Tenant, aiOn = false): string {
         `🕐 Kechikish chegarasi: <b>${t.graceMinutes} daqiqa</b>`,
         `📷 Rasm majburiy: <b>${t.requirePhoto ? 'ha' : "yo'q"}</b>`,
         `🌍 Vaqt mintaqasi: <b>${t.timezone}</b>`,
+        t.milestoneEvery > 0
+            ? `🎉 Bosqich tabrigi: har <b>${t.milestoneEvery} kunda</b>, soat <b>${String(t.milestoneHour).padStart(2, '0')}:00</b> da`
+            : "🎉 Bosqich tabrigi: <b>o'chirilgan</b>",
+        '',
+        "<i>Bu vaqtlar — umumiy. A'zo o'ziga boshqa vaqt qo'ysa, unga o'zi tanlagani ishlaydi.</i>",
         ...(aiOn
             ? [
                   '',
@@ -975,6 +1147,10 @@ function settingPrompt(field: string): string {
         dinnerTime: '🌙 Kechki ovqat vaqtini kiriting (<code>HH:mm</code>):',
         reminderInterval: '⏱ Eslatmalar orasidagi daqiqani kiriting (5-1440):',
         maxReminders: '🔁 Bir ovqat uchun maksimal eslatma sonini kiriting (0-20):',
+        milestoneEvery:
+            '🎉 Har necha kunda tabrik yuborilsin? (1-100)\n\n' +
+            "<i>40 kunlik challenge uchun odatda 10. O'chirish uchun 0 yozing.</i>",
+        milestoneHour: "🕐 Tabrik a'zoning mahalliy vaqti bilan qaysi soatda ketsin? (0-23)",
         agentName: '🤖 AI yordamchining yangi ismini kiriting:',
         coachStyle:
             '✍️ <b>Yozish uslubingizni tasvirlab bering.</b>\n\n' +

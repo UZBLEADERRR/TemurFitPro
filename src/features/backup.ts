@@ -13,7 +13,7 @@ import { audit } from '../core/tenants';
 // Fayl — oddiy JSON. 1 MB dan oshsa gzip qilinadi (Telegram uchun ham
 // yengil, ochish ham oson). Tiklashda ikkalasi ham qabul qilinadi.
 
-export const BACKUP_VERSION = 2;
+export const BACKUP_VERSION = 3;
 
 /// Zaxirada TABIIY KALIT ishlatiladi (chatId, telegramId, sana+ovqat turi),
 /// cuid emas. Sababi: guruh o'chib qayta qo'shilsa cuid o'zgaradi, lekin
@@ -32,6 +32,8 @@ export interface BackupFile {
     meals: Array<Record<string, unknown>>;
     reminderOverrides: Array<Record<string, unknown>>;
     businessConnections: Array<Record<string, unknown>>;
+    /// Yuborilgan bosqich tabriklari — tiklangach qaytadan yuborilmasin
+    milestones: Array<Record<string, unknown>>;
 }
 
 export interface BackupStats {
@@ -52,6 +54,7 @@ const TENANT_SETTING_KEYS = [
     'graceMinutes', 'reminderInterval', 'maxReminders', 'dailyTableHour',
     'requirePhoto', 'autoDeleteReminders',
     'breakfastWords', 'lunchWords', 'dinnerWords',
+    'milestoneEvery', 'milestoneHour',
 ] as const;
 
 export function backupStats(data: BackupFile): BackupStats {
@@ -70,13 +73,14 @@ export function backupStats(data: BackupFile): BackupStats {
 export async function exportTenant(tenant: Tenant): Promise<BackupFile> {
     const db = await tenantDb(tenant.botId);
 
-    const [groups, members, links, meals, overrides, connections] = await Promise.all([
+    const [groups, members, links, meals, overrides, connections, milestones] = await Promise.all([
         db.group.findMany({ orderBy: { createdAt: 'asc' } }),
         db.member.findMany({ orderBy: { joinedAt: 'asc' } }),
         db.groupMember.findMany({ include: { group: true, member: true } }),
         db.mealRecord.findMany({ include: { group: true, member: true }, orderBy: { timeSent: 'asc' } }),
         db.reminderOverride.findMany({ include: { member: true } }),
         db.businessConnection.findMany(),
+        db.milestone.findMany({ include: { group: true, member: true } }),
     ]);
 
     const settings: Record<string, unknown> = {};
@@ -111,6 +115,11 @@ export async function exportTenant(tenant: Tenant): Promise<BackupFile> {
             dmOpen: m.dmOpen,
             note: m.note,
             joinedAt: m.joinedAt,
+            // Shaxsiy ovqat vaqtlari — bular yo'qolsa odam qaytadan sozlashi kerak bo'lardi
+            breakfastTime: m.breakfastTime,
+            lunchTime: m.lunchTime,
+            dinnerTime: m.dinnerTime,
+            setupDone: m.setupDone,
         })),
 
         groupMembers: links.map(l => ({
@@ -136,6 +145,13 @@ export async function exportTenant(tenant: Tenant): Promise<BackupFile> {
             telegramId: o.member.telegramId,
             mealType: o.mealType,
             muted: o.muted,
+        })),
+
+        milestones: milestones.map(m => ({
+            telegramId: m.member.telegramId,
+            chatId: m.group.chatId,
+            day: m.day,
+            sentAt: m.sentAt,
         })),
 
         businessConnections: connections.map(c => ({
@@ -219,6 +235,7 @@ export function parseBackup(buffer: Buffer): BackupFile {
         meals: data.meals ?? [],
         reminderOverrides: data.reminderOverrides ?? [],
         businessConnections: data.businessConnections ?? [],
+        milestones: data.milestones ?? [],
     };
 }
 
@@ -234,6 +251,7 @@ export interface RestoreResult {
     meals: { created: number; skipped: number };
     overrides: number;
     connections: number;
+    milestones: number;
     settingsRestored: boolean;
 }
 
@@ -268,11 +286,13 @@ export async function importTenant(
         meals: { created: 0, skipped: 0 },
         overrides: 0,
         connections: 0,
+        milestones: 0,
         settingsRestored: false,
     };
 
     if (mode === 'replace') {
         // Tartib muhim: bog'liq jadvallar avval
+        await db.milestone.deleteMany({});
         await db.mention.deleteMany({});
         await db.mealRecord.deleteMany({});
         await db.reminderOverride.deleteMany({});
@@ -335,6 +355,10 @@ export async function importTenant(
             longitude: typeof m.longitude === 'number' ? m.longitude : null,
             dmOpen: Boolean(m.dmOpen),
             note: str(m.note),
+            breakfastTime: m.breakfastTime ? str(m.breakfastTime) : null,
+            lunchTime: m.lunchTime ? str(m.lunchTime) : null,
+            dinnerTime: m.dinnerTime ? str(m.dinnerTime) : null,
+            setupDone: Boolean(m.setupDone),
         };
 
         const existing = await db.member.findUnique({ where: { telegramId } });
@@ -431,6 +455,21 @@ export async function importTenant(
         res.connections++;
     }
 
+    // ---- Yuborilgan bosqich tabriklari ----
+    for (const m of data.milestones) {
+        const memberId = memberIdByTg.get(str(m.telegramId));
+        const groupId = groupIdByChat.get(str(m.chatId));
+        const day = Number(m.day);
+        if (!memberId || !groupId || !Number.isInteger(day)) continue;
+
+        await db.milestone.upsert({
+            where: { memberId_groupId_day: { memberId, groupId, day } },
+            create: { memberId, groupId, day, sentAt: date(m.sentAt) },
+            update: {},
+        });
+        res.milestones++;
+    }
+
     // ---- Bot sozlamalari ----
     const settingsPatch: Record<string, unknown> = {};
     for (const key of TENANT_SETTING_KEYS) {
@@ -500,6 +539,7 @@ export function formatRestore(res: RestoreResult): string {
         `🍽 Ovqat qaydi: ${res.meals.created} tiklandi, ${res.meals.skipped} allaqachon bor edi`,
         ...(res.overrides ? [`🔔 Eslatma sozlamalari: ${res.overrides}`] : []),
         ...(res.connections ? [`💼 Business ulanish: ${res.connections}`] : []),
+        ...(res.milestones ? [`🎉 Bosqich tabriklari: ${res.milestones}`] : []),
         ...(res.settingsRestored ? ['⚙️ Bot sozlamalari ham tiklandi'] : []),
     ].join('\n');
 }

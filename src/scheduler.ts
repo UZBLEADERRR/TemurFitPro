@@ -14,6 +14,7 @@ import { processOutbox } from './features/outbox';
 import { LIVE_GROUP } from './core/groups';
 import { reconcileTenantWebhooks } from './core/registry';
 import { sendBackupToAdmins } from './features/backup';
+import { runAllMilestones } from './features/milestone';
 import { settings } from './core/settings';
 
 let ticking = false;
@@ -58,6 +59,17 @@ export function startScheduler(): void {
             if (res.fixed > 0) log.info('scheduler', `webhook tiklandi: ${res.fixed}/${res.checked}`);
         } catch (e) {
             log.error('scheduler', 'webhook tekshiruvi xatosi', e);
+        }
+    });
+
+    // ===== Har soat: bosqich tabriklari ("10 kun tugadi!") =====
+    // Soat boshida emas, 2-daqiqada — kunlik jadval bilan ustma-ust tushmasin.
+    cron.schedule('2 * * * *', async () => {
+        try {
+            const n = await runAllMilestones();
+            if (n) log.info('scheduler', `${n} ta bosqich tabrigi yuborildi`);
+        } catch (e) {
+            log.error('scheduler', 'bosqich tabrigi xatosi', e);
         }
     });
 
@@ -156,8 +168,9 @@ async function remindMember(db: TenantClient, tenant: Tenant, group: Group, memb
     const date = todayIn(tz);
 
     for (const meal of MEAL_TYPES) {
-        const target = mealTargetMinutes(tenant, meal);
-        const windowEnd = mealWindowEnd(tenant, meal);
+        // A'zoning shaxsiy vaqtlari (qo'ymagan bo'lsa botning umumiy vaqti)
+        const target = mealTargetMinutes(tenant, meal, member);
+        const windowEnd = mealWindowEnd(tenant, meal, member);
 
         // Eslatma oynasi: ovqat vaqti + grace dan keyingi ovqat vaqtigacha
         if (nowMin <= target + tenant.graceMinutes || nowMin > windowEnd) continue;
