@@ -31,7 +31,7 @@ export function startScheduler(): void {
         }
     });
 
-    // ===== Har 5 daqiqada: eslatmalar =====
+    // ===== Har 15 daqiqada: eslatmalar =====
     //
     // Nega daqiqada emas: har bir tsikl tenant bazalariga tegadi va o'lchov
     // shuni ko'rsatdi — har tegish xotirada ~5 MB qoldiradi, qaytib
@@ -39,8 +39,12 @@ export function startScheduler(): void {
     // chiqardi. Railway esa xotira uchun pul oladi.
     //
     // Aniqlikdan yo'qotish yo'q: eslatmalar orasi 60 daqiqa, kechikish
-    // chegarasi ham 60 daqiqa — 5 daqiqalik qadam hech kimga sezilmaydi.
-    cron.schedule('*/5 * * * *', async () => {
+    // chegarasi ham 60 daqiqa — 15 daqiqalik qadam hech kimga sezilmaydi.
+    //
+    // Klientni bo'sh turganda yopib ko'rildi — foyda bermadi: o'lchov
+    // shuni ko'rsatdi, $disconnect() dan va GC dan keyin ham xotira
+    // qaytmaydi. Shuning uchun yagona ishlaydigan yo'l — kamroq tegish.
+    cron.schedule('*/15 * * * *', async () => {
         if (ticking) {
             log.warn('scheduler', "oldingi tsikl tugamagan, o'tkazib yuborildi");
             return;
