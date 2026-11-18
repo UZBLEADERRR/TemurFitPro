@@ -5,7 +5,7 @@
     "buildCommand": "npm run build"
   },
   "deploy": {
-    "startCommand": "node scripts/prestart.js && node dist/index.js",
+    "startCommand": "node scripts/prestart.js && MALLOC_ARENA_MAX=2 node dist/index.js",
     "healthcheckPath": "/health",
     "healthcheckTimeout": 120,
     "restartPolicyType": "ON_FAILURE",

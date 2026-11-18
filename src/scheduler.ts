@@ -20,8 +20,27 @@ import { settings } from './core/settings';
 let ticking = false;
 
 export function startScheduler(): void {
-    // ===== Har daqiqada: eslatmalar + chiquvchi navbat =====
+    // ===== Har daqiqada: chiquvchi xabarlar navbati =====
+    // Bu yengil: navbat bo'sh bo'lsa bitta so'rov bilan tugaydi.
     cron.schedule('* * * * *', async () => {
+        try {
+            const res = await processOutbox();
+            if (res.sent || res.failed) log.info('scheduler', `outbox: ${res.sent} yuborildi, ${res.failed} xato`);
+        } catch (e) {
+            log.error('scheduler', 'navbat xatosi', e);
+        }
+    });
+
+    // ===== Har 5 daqiqada: eslatmalar =====
+    //
+    // Nega daqiqada emas: har bir tsikl tenant bazalariga tegadi va o'lchov
+    // shuni ko'rsatdi — har tegish xotirada ~5 MB qoldiradi, qaytib
+    // bo'shamaydi. Daqiqada supurish 17 daqiqada 107 MB dan 199 MB ga olib
+    // chiqardi. Railway esa xotira uchun pul oladi.
+    //
+    // Aniqlikdan yo'qotish yo'q: eslatmalar orasi 60 daqiqa, kechikish
+    // chegarasi ham 60 daqiqa — 5 daqiqalik qadam hech kimga sezilmaydi.
+    cron.schedule('*/5 * * * *', async () => {
         if (ticking) {
             log.warn('scheduler', "oldingi tsikl tugamagan, o'tkazib yuborildi");
             return;
@@ -29,10 +48,8 @@ export function startScheduler(): void {
         ticking = true;
         try {
             await runReminders();
-            const res = await processOutbox();
-            if (res.sent || res.failed) log.info('scheduler', `outbox: ${res.sent} yuborildi, ${res.failed} xato`);
         } catch (e) {
-            log.error('scheduler', 'daqiqalik tsikl xatosi', e);
+            log.error('scheduler', 'eslatma tsikli xatosi', e);
         } finally {
             ticking = false;
         }
@@ -148,57 +165,105 @@ async function runReminders(): Promise<void> {
         const groups = await db.group.findMany({ where: LIVE_GROUP });
 
         for (const group of groups) {
-            const links = await db.groupMember.findMany({
-                where: { groupId: group.id, member: { status: 'active', role: 'member' } },
-                include: { member: true },
-            });
-
-            for (const link of links) {
-                await remindMember(db, tenant, group, link.member).catch(e =>
-                    log.warn('scheduler', `eslatma xatosi (${link.member.name}): ${tgError(e)}`),
-                );
-            }
+            await remindGroup(db, tenant, group).catch(e =>
+                log.warn('scheduler', `eslatma xatosi (${group.title || group.chatId}): ${tgError(e)}`),
+            );
         }
     }
 }
 
-async function remindMember(db: TenantClient, tenant: Tenant, group: Group, member: Member): Promise<void> {
-    const tz = safeTz(member.timezone);
-    const nowMin = localMinutes(tz);
-    const date = todayIn(tz);
+/// Kim qaysi ovqat uchun eslatma oynasida turibdi.
+///
+/// Sof funksiya: bazaga tegmaydi, shuning uchun sinab ko'rsa bo'ladi.
+/// Har bir a'zo O'Z vaqt mintaqasida va O'Z ovqat vaqtlarida hisoblanadi.
+///
+/// Oyna: ovqat vaqti + kechikish chegarasidan keyin boshlanadi,
+/// keyingi ovqat vaqtida (kechki uchun kun oxirida) yopiladi.
+export function dueReminders(
+    tenant: Tenant,
+    members: Member[],
+    now: Date = new Date(),
+): Array<{ member: Member; meal: MealType; date: string }> {
+    const due: Array<{ member: Member; meal: MealType; date: string }> = [];
 
-    for (const meal of MEAL_TYPES) {
-        // A'zoning shaxsiy vaqtlari (qo'ymagan bo'lsa botning umumiy vaqti)
-        const target = mealTargetMinutes(tenant, meal, member);
-        const windowEnd = mealWindowEnd(tenant, meal, member);
+    for (const member of members) {
+        const tz = safeTz(member.timezone);
+        const nowMin = localMinutes(tz, now);
+        const date = todayIn(tz, now);
 
-        // Eslatma oynasi: ovqat vaqti + grace dan keyingi ovqat vaqtigacha
-        if (nowMin <= target + tenant.graceMinutes || nowMin > windowEnd) continue;
+        for (const meal of MEAL_TYPES) {
+            const target = mealTargetMinutes(tenant, meal, member);
+            const windowEnd = mealWindowEnd(tenant, meal, member);
+            if (nowMin <= target + tenant.graceMinutes || nowMin > windowEnd) continue;
+            due.push({ member, meal, date });
+        }
+    }
+    return due;
+}
 
-        const muted = await db.reminderOverride.findUnique({
-            where: { memberId_mealType: { memberId: member.id, mealType: meal } },
-        });
-        if (muted?.muted) continue;
+/// Bitta guruhning eslatmalari.
+///
+/// DIQQAT: bu funksiya har DAQIQADA, kuniga 1440 marta ishlaydi. Ilgari u
+/// har bir a'zo uchun alohida uchta so'rov yuborardi — 60 a'zoda daqiqasiga
+/// 540 tagacha Prisma so'rovi. O'lchov shuni ko'rsatdi: shu tsikl yoqiq
+/// bo'lsa xotira daqiqasiga ~5 MB o'sib borardi (17 daqiqada 107 MB dan
+/// 199 MB ga), o'chirilsa esa 110 MB da turib qolardi.
+///
+/// Shuning uchun endi:
+///   1) kim eslatma oynasida ekani BAZAGA TEGMASDAN hisoblanadi
+///   2) hech kim bo'lmasa — bitta ham so'rov yuborilmaydi (ko'p daqiqalarda shunday)
+///   3) bor bo'lsa — a'zo boshiga emas, GURUH boshiga uchta to'plam so'rov
+async function remindGroup(db: TenantClient, tenant: Tenant, group: Group): Promise<void> {
+    const links = await db.groupMember.findMany({
+        where: { groupId: group.id, member: { status: 'active', role: 'member' } },
+        include: { member: true },
+    });
+    if (links.length === 0) return;
 
-        const already = await db.mealRecord.findUnique({
-            where: { memberId_date_mealType: { memberId: member.id, date, mealType: meal } },
-        });
-        if (already) continue;
+    // 1) Oynada turganlarni xotirada aniqlaymiz
+    const due = dueReminders(tenant, links.map(l => l.member));
+    if (due.length === 0) return; // eng ko'p uchraydigan holat — bazaga umuman tegmaymiz
 
-        const existing = await db.mention.findUnique({
-            where: {
-                groupId_memberId_mealType_date: { groupId: group.id, memberId: member.id, mealType: meal, date },
-            },
-        });
+    const memberIds = [...new Set(due.map(d => d.member.id))];
+    const dates = [...new Set(due.map(d => d.date))];
 
+    // 2) Uchta to'plam so'rov — a'zo soniga bog'liq emas
+    const [overrides, records, mentions] = await Promise.all([
+        db.reminderOverride.findMany({
+            where: { memberId: { in: memberIds }, muted: true },
+            select: { memberId: true, mealType: true },
+        }),
+        db.mealRecord.findMany({
+            where: { memberId: { in: memberIds }, date: { in: dates } },
+            select: { memberId: true, mealType: true, date: true },
+        }),
+        db.mention.findMany({
+            where: { groupId: group.id, memberId: { in: memberIds }, date: { in: dates } },
+        }),
+    ]);
+
+    // 3) Qolgan tekshiruvlar xotirada
+    const slot = (memberId: string, meal: string, date: string) => `${memberId}|${meal}|${date}`;
+    const muted = new Set(overrides.map(o => `${o.memberId}|${o.mealType}`));
+    const done = new Set(records.map(r => slot(r.memberId, r.mealType, r.date)));
+    const sent = new Map(mentions.map(m => [slot(m.memberId, m.mealType, m.date), m]));
+
+    for (const { member, meal, date } of due) {
+        if (muted.has(`${member.id}|${meal}`)) continue;
+        if (done.has(slot(member.id, meal, date))) continue;
+
+        const existing = sent.get(slot(member.id, meal, date));
         if (existing) {
             if (existing.count >= tenant.maxReminders) continue;
             if (differenceInMinutes(new Date(), existing.updatedAt) < tenant.reminderInterval) continue;
         }
 
-        await sendReminder(db, tenant, group, member, meal, date, existing?.messageId ?? null, existing?.count ?? 0);
+        await sendReminder(db, tenant, group, member, meal, date, existing?.messageId ?? null, existing?.count ?? 0).catch(
+            e => log.warn('scheduler', `eslatma yuborilmadi (${member.name}): ${tgError(e)}`),
+        );
     }
 }
+
 
 async function sendReminder(
     db: TenantClient,
