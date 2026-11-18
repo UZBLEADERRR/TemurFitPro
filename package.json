@@ -8,9 +8,9 @@
     "node": "22.x"
   },
   "scripts": {
-    "start": "node scripts/prestart.js && npx tsx src/index.ts",
+    "start": "node scripts/prestart.js && node dist/index.js",
     "dev": "node scripts/prestart.js && npx tsx watch src/index.ts",
-    "build": "npm run generate && cd client && npm install --include=dev && npm run build",
+    "build": "npm run generate && npm run build:server && npm run build:client",
     "typecheck": "npm run generate && npx tsc --noEmit",
     "generate": "npx prisma generate --schema prisma/platform.prisma && npx prisma generate --schema prisma/tenant.prisma",
     "sql:tenant": "npx prisma migrate diff --from-empty --to-schema-datamodel prisma/tenant.prisma --script > prisma/tenant-init.sql",
@@ -21,7 +21,9 @@
     "test:text": "npx tsx scripts/test-text.ts",
     "test:backup": "npx tsx scripts/test-backup.ts",
     "test:scope": "npx tsx scripts/test-scope.ts",
-    "test:schedule": "npx tsx scripts/test-schedule.ts"
+    "test:schedule": "npx tsx scripts/test-schedule.ts",
+    "build:server": "npx tsc && node scripts/copy-generated.js",
+    "build:client": "cd client && npm install --include=dev && npm run build"
   },
   "license": "ISC",
   "dependencies": {
