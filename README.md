@@ -182,6 +182,12 @@ Botni birinchi bo'lib `/start` bosgan odam avtomatik **ega** (owner) bo'ladi.
 Botga **birinchi** `/start` bosgan odam avtomatik **ega** (owner) bo'ladi —
 u allaqachon barcha guruhlarni ko'radi, qo'shimcha tayinlash kerak emas.
 
+Ega tasodifan boshqa odam bo'lib qolsa (masalan botni siz sinab ko'rgan
+bo'lsangiz): 🎯 **Murabbiylar** → nomga bosing → **👑 Egalikni shu odamga
+berish** yoki **⬇️ Murabbiylikdan olish**. Egalik bitta odamda bo'ladi;
+boshqasiga berilsa, avvalgisi murabbiy bo'lib qoladi. Bot boshqaruvsiz
+qolmasligi uchun oxirgi murabbiyni olib tashlashga ruxsat berilmaydi.
+
 Har ikki xil murabbiy ham o'z guruhlarida **xodim** sifatida qaraladi:
 pinlangan jadvalga tushmaydi, eslatma olmaydi, statistikada ishtirokchi
 bo'lib hisoblanmaydi — guruhga ovqat rasmini tashlagan bo'lsa ham.

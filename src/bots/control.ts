@@ -609,6 +609,56 @@ controlBot.on('callback_query', async ctx => {
             case 'coaches':
                 return showCoaches(ctx, id);
 
+            case 'coachview': {
+                const t = await prisma.tenant.findUnique({ where: { id } });
+                if (!t) return showMain(ctx);
+                const db = await tenantDb(t.botId);
+                const m = await db.member.findUnique({ where: { id: extra! } });
+                if (!m) return showCoaches(ctx, id);
+
+                const isOwner = m.role === 'owner';
+                const actions: any[][] = [];
+                if (!isOwner) {
+                    actions.push([Markup.button.callback('👑 Egalikni shu odamga berish', `s:setowner:${id}:${m.id}`)]);
+                }
+                actions.push([Markup.button.callback("⬇️ Murabbiylikdan olish", `s:rmcoach:${id}:${m.id}`)]);
+                actions.push([Markup.button.callback('⬅️ Murabbiylar', `s:coaches:${id}`)]);
+
+                return reply(
+                    ctx,
+                    [
+                        `${isOwner ? '👑' : '🎯'} <b>${esc(m.name)}</b>`,
+                        m.username ? `@${esc(m.username)}` : '',
+                        isOwner ? '<i>Bot egasi</i>' : '<i>Murabbiy</i>',
+                        '',
+                        isOwner
+                            ? "Ega — botga <b>birinchi</b> /start bosgan odam. Huquqi murabbiy bilan bir xil, farqi faqat belgida."
+                            : "Murabbiy botning barcha guruhlarini ko'radi va boshqaradi.",
+                        '',
+                        "<i>Olib tashlasangiz u oddiy a'zoga aylanadi — ma'lumotlari va",
+                        "ovqat tarixi tegilmaydi.</i>",
+                    ]
+                        .filter(Boolean)
+                        .join('\n'),
+                    Markup.inlineKeyboard(actions),
+                );
+            }
+
+            case 'setowner': {
+                const t = await prisma.tenant.findUnique({ where: { id } });
+                if (!t) return showMain(ctx);
+                const db = await tenantDb(t.botId);
+                const m = await db.member.findUnique({ where: { id: extra! } });
+                if (!m) return showCoaches(ctx, id);
+
+                // Egalik bitta odamda bo'ladi — eskisi murabbiy bo'lib qoladi
+                await db.member.updateMany({ where: { role: 'owner' }, data: { role: 'coach' } });
+                await db.member.update({ where: { id: m.id }, data: { role: 'owner' } });
+                await audit(id, String(ctx.from.id), 'owner.transfer', m.name);
+                await reply(ctx, `👑 Egalik <b>${esc(m.name)}</b> ga berildi.`);
+                return showCoaches(ctx, id);
+            }
+
             case 'addcoach':
                 await setControlState(String(ctx.chat!.id), 'await:coachId', { tenantId: id });
                 return reply(
@@ -619,10 +669,28 @@ controlBot.on('callback_query', async ctx => {
 
             case 'rmcoach': {
                 const t = await prisma.tenant.findUnique({ where: { id } });
-                if (t) {
-                    const db = await tenantDb(t.botId);
-                    await db.member.update({ where: { id: extra }, data: { role: 'member' } });
+                if (!t) return showMain(ctx);
+                const db = await tenantDb(t.botId);
+
+                // Oxirgi murabbiyni olib tashlasak bot boshqaruvsiz qoladi
+                const managers = await db.member.count({ where: { role: { in: ['coach', 'owner'] } } });
+                if (managers <= 1) {
+                    return reply(
+                        ctx,
+                        [
+                            "⚠️ Bu botning yagona murabbiysi.",
+                            '',
+                            "Olib tashlasangiz botni boshqaradigan odam qolmaydi.",
+                            "Avval ➕ <b>Murabbiy qo'shish</b> bilan boshqa odamni tayinlang.",
+                        ].join('\n'),
+                        back(`s:coaches:${id}`),
+                    );
                 }
+
+                const m = await db.member.findUnique({ where: { id: extra! } });
+                await db.member.update({ where: { id: extra! }, data: { role: 'member' } });
+                await audit(id, String(ctx.from.id), 'coach.remove', m?.name ?? String(extra));
+                await reply(ctx, `⬇️ <b>${esc(m?.name ?? '')}</b> endi oddiy a'zo.`);
                 return showCoaches(ctx, id);
             }
 
@@ -1069,10 +1137,13 @@ async function showCoaches(ctx: Context, tenantId: string) {
         orderBy: { joinedAt: 'asc' },
     });
 
+    // Ilgari 👑 ega qatori o'lik edi — uni bosganda ekran shunchaki qayta
+    // chizilardi va egani olib tashlashning ham, egalikni boshqaga berishning
+    // ham iloji yo'q edi. Endi har bir nom o'z kartasini ochadi.
     const rows = coaches.map(c => [
         Markup.button.callback(
-            `${c.role === 'owner' ? '👑' : '🎯'} ${c.name}${c.role === 'owner' ? '' : ' ✕'}`,
-            c.role === 'owner' ? `s:coaches:${tenantId}` : `s:rmcoach:${tenantId}:${c.id}`,
+            `${c.role === 'owner' ? '👑' : '🎯'} ${c.name}`,
+            `s:coachview:${tenantId}:${c.id}`,
         ),
     ]);
     rows.push([Markup.button.callback("➕ Murabbiy qo'shish", `s:addcoach:${tenantId}`)]);
@@ -1081,7 +1152,7 @@ async function showCoaches(ctx: Context, tenantId: string) {
     return reply(
         ctx,
         coaches.length
-            ? `🎯 <b>Murabbiylar (${coaches.length})</b>\n\n👑 ega · 🎯 murabbiy\n<i>Nomga bosilsa murabbiylik olinadi.</i>`
+            ? `🎯 <b>Murabbiylar (${coaches.length})</b>\n\n👑 ega · 🎯 murabbiy\n<i>Nomga bosing — olib tashlash yoki egalikni berish.</i>`
             : '🎯 Hali murabbiy tayinlanmagan.',
         Markup.inlineKeyboard(rows),
     );
