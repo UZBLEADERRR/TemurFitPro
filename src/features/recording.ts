@@ -2,7 +2,7 @@ import type { Context } from 'telegraf';
 import type { Tenant } from '../generated/platform';
 import type { Member, Group } from '../generated/tenant';
 import type { TenantClient } from '../core/db';
-import { detectMealType, mealTargetMinutes, mealTimesFor, MEAL_LABELS, MealType } from '../core/meals';
+import { detectMealType, mealByTime, mealTargetMinutes, mealTimesFor, MEAL_LABELS, MealType } from '../core/meals';
 import { todayIn, daysAgoIn, localMinutes, hhmmToMinutes, safeTz } from '../core/time';
 import { refreshTablesForMember } from './table';
 import { getBotByTenant } from '../core/registry';
@@ -109,12 +109,20 @@ export async function handleGroupMeal(
     if (!msg || !ctx.from) return false;
 
     const caption: string = msg.caption || msg.text || '';
-    const meal = detectMealType(tenant, caption);
-    if (!meal) return false;
-
     const hasPhoto = Array.isArray(msg.photo) && msg.photo.length > 0;
     const hasVideo = !!msg.video;
     if (tenant.requirePhoto && !hasPhoto && !hasVideo) return false;
+
+    // Hashtag bo'lsa — o'sha. Bo'lmasa va murabbiy hashtagni majburiy
+    // qilmagan bo'lsa — ovqat turini yuborilgan vaqtdan topamiz.
+    //
+    // Matn (rasmsiz) xabarlar bunga kirmaydi: aks holda guruhdagi oddiy
+    // suhbat ham ovqat deb yozilib ketardi.
+    let meal = detectMealType(tenant, caption);
+    if (!meal) {
+        if (tenant.requireHashtag || !(hasPhoto || hasVideo)) return false;
+        meal = null; // pastda a'zo topilgach uning vaqtlari bo'yicha aniqlanadi
+    }
 
     const telegramId = String(ctx.from.id);
     let member = await db.member.findUnique({ where: { telegramId } });
@@ -140,16 +148,24 @@ export async function handleGroupMeal(
         update: {},
     });
 
+    // Vaqt bo'yicha aniqlash a'zoning O'Z mintaqasi va O'Z vaqtlariga qarab
+    const resolved: MealType =
+        meal ?? mealByTime(tenant, member, localMinutes(safeTz(member.timezone)));
+
     const photoFileId = hasPhoto ? msg.photo[msg.photo.length - 1].file_id : msg.video?.file_id;
-    const result = await recordMeal(db, tenant, member, group, meal, {
+    const result = await recordMeal(db, tenant, member, group, resolved, {
         photoFileId,
         messageId: msg.message_id,
         caption,
     });
 
     const mark = result.status === 'late' ? '🟡 Kech, lekin qabul qilindi' : '🟢 Qabul qilindi';
+    // Hashtagsiz kelgan bo'lsa qaysi ovqat deb yozilganini aytamiz —
+    // noto'g'ri tushgan bo'lsa odam darrov ko'radi
+    const note = meal ? '' : ' <i>(vaqt bo\'yicha)</i>';
     try {
-        await ctx.reply(`${mark} — ${MEAL_LABELS[meal]} 💪`, {
+        await ctx.reply(`${mark} — ${MEAL_LABELS[resolved]}${note} 💪`, {
+            parse_mode: 'HTML',
             reply_parameters: { message_id: msg.message_id },
         });
     } catch (e) {

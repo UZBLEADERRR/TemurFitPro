@@ -23,6 +23,21 @@ export const PENDING_GROUP = { isActive: true, status: 'pending' } as const;
 /// Shu shartsiz u reyting va a'zolar ro'yxatida 0% bo'lib ko'rinib turadi.
 export const IN_LIVE_GROUP = { groups: { some: { group: LIVE_GROUP } } } as const;
 
+/// Guruh ISHTIROKCHISI — jadvalga tushadigan va "A'zolar" sonida sanaladigan odam.
+///
+/// Chiqarib tashlanadigan yagona toifa — shu guruhning murabbiysi
+/// (GroupMember.role = 'coach'): u boshqaruv uchun qo'shilgan, ratsion
+/// yubormaydi.
+///
+/// DIQQAT: bu yerda Member.role ga QARALMAYDI. Bot egasi yoki murabbiy
+/// guruhga ovqat yuborsa, uning qaydi qabul qilinadi — demak u jadvalda ham
+/// ko'rinishi shart. Aks holda bot "qabul qilindi" deb javob beradi-yu,
+/// jadval "Hali a'zolar yo'q" deb turadi.
+export const GROUP_PARTICIPANT = {
+    role: { not: 'coach' },
+    member: { status: 'active' },
+} as const;
+
 export function isLive(g: { isActive: boolean; status: string }): boolean {
     return g.isActive && g.status === 'approved';
 }

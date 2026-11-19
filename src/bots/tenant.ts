@@ -21,7 +21,7 @@ import { recordSend, pendingSummary, failedSummary } from '../features/outbox';
 import { deliverToMember, describeAttempts, CHANNEL_LABEL } from '../features/delivery';
 import { isSuperAdmin, registerIncomingGroup, markGroupLeft } from '../core/tenants';
 import { notifySuperAdmins } from '../features/notify';
-import { LIVE_GROUP, IN_LIVE_GROUP, statusBadge } from '../core/groups';
+import { LIVE_GROUP, IN_LIVE_GROUP, GROUP_PARTICIPANT, statusBadge } from '../core/groups';
 import { scopeFor, allowsGroup, FULL_SCOPE, type Scope } from '../core/scope';
 import {
     SETUP_LOCATION, SETUP_TIME, locationPrompt,
@@ -68,7 +68,7 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
                 // Ilgari tasdiqlangan guruh — bot qaytib keldi
                 log.info('tenant-bot', `tasdiqlangan guruhga qaytdi: ${chat.id}`);
                 await ctx.telegram
-                    .sendMessage(chat.id, welcomeText(), { parse_mode: 'HTML' })
+                    .sendMessage(chat.id, welcomeText(ctxData.tenant.requireHashtag), { parse_mode: 'HTML' })
                     .catch(() => undefined);
                 return;
             }
@@ -643,7 +643,7 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
                 }
                 const rows = await Promise.all(
                     all.map(async g => {
-                        const n = await db.groupMember.count({ where: { groupId: g.id } });
+                        const n = await db.groupMember.count({ where: { groupId: g.id, ...GROUP_PARTICIPANT } });
                         const mark = g.status === 'approved' ? '🏠' : g.status === 'pending' ? '⏳' : '❌';
                         return [
                             Markup.button.callback(
@@ -675,7 +675,7 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
                 const group = await db.group.findUnique({ where: { id: arg! } });
                 if (!group) return;
                 const [people, meals] = await Promise.all([
-                    db.groupMember.count({ where: { groupId: group.id } }),
+                    db.groupMember.count({ where: { groupId: group.id, ...GROUP_PARTICIPANT } }),
                     db.mealRecord.count({ where: { groupId: group.id } }),
                 ]);
                 await reply(
@@ -773,15 +773,19 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
                 await reply(ctx, settingPrompt(arg), backTo('c:settings', '❌ Bekor qilish'));
                 return;
 
-            case 'toggle':
-                if (arg === 'requirePhoto') {
-                    const updated = await prisma.tenant.update({
-                        where: { id: tenantId },
-                        data: { requirePhoto: !tenant.requirePhoto },
-                    });
-                    await reply(ctx, settingsText(updated, aiAvailable(updated)), settingsMenu(updated, aiAvailable(updated)));
-                }
+            case 'toggle': {
+                const flags: Record<string, boolean> = {
+                    requirePhoto: !tenant.requirePhoto,
+                    requireHashtag: !tenant.requireHashtag,
+                };
+                if (!arg || !(arg in flags)) return;
+                const updated = await prisma.tenant.update({
+                    where: { id: tenantId },
+                    data: { [arg]: flags[arg] },
+                });
+                await reply(ctx, settingsText(updated, aiAvailable(updated)), settingsMenu(updated, aiAvailable(updated)));
                 return;
+            }
         }
     }
 
@@ -1047,12 +1051,21 @@ async function showMemberCard(ctx: Context, db: TenantClient, tenant: Tenant, me
 }
 
 /// Guruhga yuboriladigan tanishtiruv matni
-function welcomeText(): string {
+export function welcomeText(requireHashtag = true): string {
     return [
         '✅ <b>Bot ishga tushdi!</b>',
         '',
-        'Ovqat rasmini hashtag bilan yuboring:',
-        '<code>#nonushta</code> · <code>#tushlik</code> · <code>#kechki</code>',
+        ...(requireHashtag
+            ? [
+                  'Ovqat rasmini hashtag bilan yuboring:',
+                  '<code>#nonushta</code> · <code>#tushlik</code> · <code>#kechki</code>',
+              ]
+            : [
+                  'Ovqat rasmini yuboravering — hashtag shart emas.',
+                  '<i>Qaysi ovqat ekani yuborilgan vaqtga qarab aniqlanadi.</i>',
+                  '',
+                  'Aniq ko\'rsatmoqchi bo\'lsangiz: <code>#nonushta</code> · <code>#tushlik</code> · <code>#kechki</code>',
+              ]),
         '',
         'Botni <b>admin</b> qiling — shunda jadvalni pinlay oladi va eslatmalarni tozalaydi.',
     ].join('\n');
@@ -1127,6 +1140,9 @@ function settingsText(t: Tenant, aiOn = false): string {
         `⏱ Eslatma oralig'i: <b>${t.reminderInterval} daqiqa</b> · maks <b>${t.maxReminders}</b>`,
         `🕐 Kechikish chegarasi: <b>${t.graceMinutes} daqiqa</b>`,
         `📷 Rasm majburiy: <b>${t.requirePhoto ? 'ha' : "yo'q"}</b>`,
+        t.requireHashtag
+            ? '#️⃣ Hashtag majburiy: <b>ha</b>'
+            : "#️⃣ Hashtag majburiy: <b>yo'q</b> — <i>hashtagsiz rasm ham qabul qilinadi,\novqat turi yuborilgan vaqtga qarab aniqlanadi</i>",
         `🌍 Vaqt mintaqasi: <b>${t.timezone}</b>`,
         t.milestoneEvery > 0
             ? `🎉 Bosqich tabrigi: har <b>${t.milestoneEvery} kunda</b>, soat <b>${String(t.milestoneHour).padStart(2, '0')}:00</b> da`

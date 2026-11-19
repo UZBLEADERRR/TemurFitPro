@@ -13,7 +13,7 @@ import {
     isSuperAdmin, audit, TenantError, PurgeScope,
     listOrphanMembers, purgeOrphanMembers,
 } from '../core/tenants';
-import { LIVE_GROUP, IN_LIVE_GROUP, statusBadge } from '../core/groups';
+import { LIVE_GROUP, IN_LIVE_GROUP, GROUP_PARTICIPANT, statusBadge } from '../core/groups';
 import { getEntry, webhookUrl, tenantSpec, reconcileTenantWebhooks } from '../core/registry';
 import { getState } from '../core/webhooks';
 import { ask, aiAvailable, aiOffReason } from '../ai/agent';
@@ -292,7 +292,7 @@ controlBot.on('callback_query', async ctx => {
                 const g = await db.group.findUnique({ where: { id: extra! } });
                 if (!g) return showGroups(ctx, id);
 
-                const people = await db.groupMember.count({ where: { groupId: g.id } });
+                const people = await db.groupMember.count({ where: { groupId: g.id, ...GROUP_PARTICIPANT } });
                 const meals = await db.mealRecord.count({ where: { groupId: g.id } });
 
                 return reply(
@@ -1097,7 +1097,7 @@ async function showGroups(ctx: Context, tenantId: string) {
 
     const rows = await Promise.all(
         groups.map(async g => {
-            const n = await db.groupMember.count({ where: { groupId: g.id } });
+            const n = await db.groupMember.count({ where: { groupId: g.id, ...GROUP_PARTICIPANT } });
             const mark = !g.isActive ? '🚪' : g.status === 'approved' ? '🏠' : '⏳';
             return [
                 Markup.button.callback(
@@ -1318,19 +1318,11 @@ async function showPending(ctx: Context) {
 async function announceApproved(tenant: Tenant, chatId: string) {
     const entry = getEntry(tenant.botId);
     if (!entry) return;
+    // Matn bitta joyda — bot guruhga qo'shilganda ham, tasdiqlangandan
+    // keyin ham aynan shu yuboriladi
+    const { welcomeText } = await import('./tenant');
     await entry.bot.telegram
-        .sendMessage(
-            chatId,
-            [
-                '✅ <b>Bot ishga tushdi!</b>',
-                '',
-                'Ovqat rasmini hashtag bilan yuboring:',
-                '<code>#nonushta</code> · <code>#tushlik</code> · <code>#kechki</code>',
-                '',
-                'Botni <b>admin</b> qiling — shunda jadvalni pinlay oladi va eslatmalarni tozalaydi.',
-            ].join('\n'),
-            { parse_mode: 'HTML' },
-        )
+        .sendMessage(chatId, welcomeText(tenant.requireHashtag), { parse_mode: 'HTML' })
         .catch(e => log.warn('control-bot', `guruhga xabar yetmadi: ${tgError(e)}`));
 }
 
@@ -1343,7 +1335,7 @@ async function showGroup(ctx: Context, tenantId: string, groupId: string) {
     if (!g) return showGroups(ctx, tenantId);
 
     const [people, meals] = await Promise.all([
-        db.groupMember.count({ where: { groupId: g.id } }),
+        db.groupMember.count({ where: { groupId: g.id, ...GROUP_PARTICIPANT } }),
         db.mealRecord.count({ where: { groupId: g.id } }),
     ]);
 

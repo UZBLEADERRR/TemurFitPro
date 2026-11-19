@@ -320,7 +320,25 @@ Guruhga ovqat rasmini hashtag bilan yuborish:
 
 `#nonushta` · `#tushlik` · `#kechki`
 
-Kalit so'zlarni murabbiy o'zgartirishi mumkin. Bot javob beradi, pinlangan
+Kalit so'zlarni murabbiy o'zgartirishi mumkin.
+
+**Hashtagsiz ham bo'ladi.** ⚙️ Sozlamalar → #️⃣ **Hashtag majburiy: yo'q**
+qilsangiz, oddiy rasm ham qabul qilinadi — qaysi ovqat ekani **yuborilgan
+vaqtga** qarab aniqlanadi (a'zoning o'z vaqtlari va mintaqasi bo'yicha):
+
+| Qachon yuborildi | Qaysi ovqat |
+|---|---|
+| Nonushtadan oldin | Kechki (kechagi kunga yoziladi) |
+| Tushlikkacha | Nonushta |
+| Kechkigacha | Tushlik |
+| Undan keyin | Kechki |
+
+Bot javobida qavs ichida *(vaqt bo'yicha)* deb yozadi — noto'g'ri tushgan
+bo'lsa odam darrov ko'radi va hashtag bilan qayta yuboradi. Hashtag yozilgan
+bo'lsa doim **o'sha** ustun turadi.
+
+Rasmsiz oddiy matn hech qachon ovqat deb yozilmaydi — aks holda guruhdagi
+suhbat ham qaydga tushib ketardi. Bot javob beradi, pinlangan
 jadvalni yangilaydi va o'sha ovqat uchun yuborilgan eslatmani guruhdan o'chiradi.
 
 Yarim tundan keyin yuborilgan kechki ovqat kechagi kunga yoziladi.

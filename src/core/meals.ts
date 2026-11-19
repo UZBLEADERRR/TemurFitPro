@@ -95,6 +95,22 @@ export function mealWindowEnd(tenant: Tenant, meal: MealType, member?: MemberTim
     return nextMin > start ? nextMin : END_OF_DAY;
 }
 
+/// Hashtag yozilmagan bo'lsa — ovqat turini VAQTga qarab topamiz.
+///
+/// Chegaralar a'zoning o'z vaqtlari bo'yicha:
+///   nonushtagacha  → kechki (yarim tundan keyingi rasm — kechagi kechki ovqat;
+///                    recordMeal uni kechagi kunga yozadi)
+///   tushlikkacha   → nonushta
+///   kechkigacha    → tushlik
+///   undan keyin    → kechki
+export function mealByTime(tenant: Tenant, member: MemberTimes | null | undefined, nowMin: number): MealType {
+    const t = mealTimesFor(tenant, member);
+    if (nowMin < hhmmToMinutes(t.nonushta)) return 'kechki';
+    if (nowMin < hhmmToMinutes(t.tushlik)) return 'nonushta';
+    if (nowMin < hhmmToMinutes(t.kechki)) return 'tushlik';
+    return 'kechki';
+}
+
 /// "HH:mm" to'g'rimi (00:00 — 23:59)
 export function isValidTime(v: string): boolean {
     return /^([01]\d|2[0-3]):[0-5]\d$/.test(v.trim());

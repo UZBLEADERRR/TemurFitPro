@@ -8,7 +8,7 @@ import { todayIn, safeTz } from '../core/time';
 import { tgError, withRetry, esc, safeText, truncate, padVisual, visualLength, isChatGone } from '../core/telegram';
 import { webappUrl } from '../core/settings';
 import { log } from '../core/logger';
-import { LIVE_GROUP } from '../core/groups';
+import { LIVE_GROUP, GROUP_PARTICIPANT } from '../core/groups';
 import { markGroupLeft } from '../core/tenants';
 
 const MARK_DONE = '🟢';
@@ -24,20 +24,8 @@ interface Row {
 /// Har bir a'zoning sanasi O'ZINING vaqt mintaqasida hisoblanadi —
 /// Koreyadagi va O'zbekistondagi a'zolar bir jadvalda to'g'ri ko'rinadi.
 async function buildRows(db: TenantClient, group: Group): Promise<Row[]> {
-    // Murabbiy — xodim, ishtirokchi emas. Ikki xil murabbiy ham chiqarib
-    // tashlanadi, aks holda ular jadvalda ⚪️⚪️⚪️ bo'lib turardi:
-    //
-    //   GroupMember.role = 'coach'  → shu guruh murabbiysi
-    //   Member.role = coach|owner   → butun bot murabbiysi (masalan ega)
-    //
-    // Eslatmalar va statistika allaqachon shunday hisoblaydi — jadval ham
-    // shularga mos bo'lishi kerak.
     const links = await db.groupMember.findMany({
-        where: {
-            groupId: group.id,
-            role: { not: 'coach' },
-            member: { status: 'active', role: 'member' },
-        },
+        where: { groupId: group.id, ...GROUP_PARTICIPANT },
         include: { member: true },
         orderBy: { joinedAt: 'asc' },
     });

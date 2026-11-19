@@ -52,6 +52,9 @@ model Tenant {
   maxReminders        Int     @default(3)
   dailyTableHour      Int     @default(6)
   requirePhoto        Boolean @default(true)
+  /// Hashtag majburiymi. false bo'lsa, hashtagsiz rasm ham qabul qilinadi —
+  /// ovqat turi yuborilgan VAQTGA qarab aniqlanadi.
+  requireHashtag      Boolean @default(true)
   autoDeleteReminders Boolean @default(true)
 
   /// Har necha kunda bosqich tabrigi yuborilsin (0 = o'chirilgan)

@@ -75,6 +75,7 @@ export function settingsMenu(
         reminderInterval: number;
         maxReminders: number;
         requirePhoto: boolean;
+        requireHashtag: boolean;
         agentName: string;
         milestoneEvery: number;
         milestoneHour: number;
@@ -90,6 +91,12 @@ export function settingsMenu(
             Markup.button.callback(`🔁 Maks — ${t.maxReminders}`, 'c:set:maxReminders'),
         ],
         [Markup.button.callback(`📷 Rasm majburiy: ${t.requirePhoto ? 'ha' : "yo'q"}`, 'c:toggle:requirePhoto')],
+        [
+            Markup.button.callback(
+                `#️⃣ Hashtag majburiy: ${t.requireHashtag ? 'ha' : "yo'q"}`,
+                'c:toggle:requireHashtag',
+            ),
+        ],
         [
             Markup.button.callback(
                 t.milestoneEvery > 0 ? `🎉 Tabrik — har ${t.milestoneEvery} kun` : "🎉 Tabrik — o'chiq",

@@ -132,16 +132,26 @@ async function main() {
     check('13 bot murabbiysi BARCHA guruhni ko\'radi (cheklovsiz)',
         scGlobal.isManager && scGlobal.groupIds === null, JSON.stringify(scGlobal));
 
-    // U guruhga rasm tashlagan bo'lsa ham jadvalda ishtirokchi emas
+    // Bot murabbiysi guruhga OVQAT YUBORSA — u ishtirokchi, jadvalda
+    // ko'rinishi SHART. Aks holda bot "qabul qilindi" deb javob beradi-yu,
+    // jadval "Hali a'zolar yo'q" deb turadi.
     await db.groupMember.create({ data: { groupId: g1.id, memberId: temur.id } });
     await db.mealRecord.create({
         data: { memberId: temur.id, groupId: g1.id, date: '2026-11-19', mealType: 'tushlik',
                 timeSent: new Date(), status: 'on_time' },
     });
     const jadval2 = await renderTable(db, tenant, g1);
-    check('14 bot murabbiysi rasm tashlasa ham jadvalda ishtirokchi emas',
-        !jadval2.includes('Temur'), jadval2.slice(0, 250));
+    check('14 ovqat yuborgan bot murabbiysi jadvalda KO\'RINADI',
+        jadval2.includes('Temur'), jadval2.slice(0, 250));
     check('15 oddiy a\'zo esa joyida', jadval2.includes('Dilnoza'));
+
+    // Lekin GURUH murabbiysi (boshqaruv uchun qo'shilgan) ko'rinmaydi
+    await db.groupMember.update({
+        where: { groupId_memberId: { groupId: g1.id, memberId: temur.id } },
+        data: { role: 'coach' },
+    });
+    const jadval3 = await renderTable(db, tenant, g1);
+    check('16 guruh murabbiysi esa jadvalda yo\'q', !jadval3.includes('Temur'), jadval3.slice(0, 250));
 
     console.log(`\nHAMMASI O'TDI (${passed})`);
     await prisma.$disconnect();

@@ -52,7 +52,7 @@ const TENANT_SETTING_KEYS = [
     'agentName', 'coachStyle', 'timezone',
     'breakfastTime', 'lunchTime', 'dinnerTime',
     'graceMinutes', 'reminderInterval', 'maxReminders', 'dailyTableHour',
-    'requirePhoto', 'autoDeleteReminders',
+    'requirePhoto', 'requireHashtag', 'autoDeleteReminders',
     'breakfastWords', 'lunchWords', 'dinnerWords',
     'milestoneEvery', 'milestoneHour',
 ] as const;
