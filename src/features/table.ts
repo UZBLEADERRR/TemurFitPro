@@ -6,14 +6,15 @@ import { getBotByTenant } from '../core/registry';
 import { MEAL_TYPES, MealType } from '../core/meals';
 import { todayIn, safeTz } from '../core/time';
 import { tgError, withRetry, esc, safeText, truncate, padVisual, visualLength, isChatGone } from '../core/telegram';
-import { webappUrl } from '../core/settings';
 import { log } from '../core/logger';
 import { LIVE_GROUP, GROUP_PARTICIPANT } from '../core/groups';
 import { markGroupLeft } from '../core/tenants';
 
-const MARK_DONE = '🟢';
-const MARK_LATE = '🟡';
-const MARK_MISS = '⚪️';
+// Belgilar ataylab oddiy: rangli doirachalar ikki barobar keng chiziladi va
+// <code> ichidagi ustunni surib yuboradi. Bular esa bir xil kenglikda turadi.
+const MARK_DONE = '+';
+const MARK_LATE = '~';
+const MARK_MISS = '·';
 
 interface Row {
     name: string;
@@ -49,10 +50,10 @@ export async function renderTable(db: TenantClient, tenant: Tenant, group: Group
     const rows = await buildRows(db, group);
     const dateStr = todayIn(safeTz(tenant.timezone));
 
-    const header = [`<b>💪 ${esc(group.title || 'Ratsion jadvali')}</b>`, `📅 ${dateStr}`, ''];
+    const header = [`<b>${esc(group.title || 'Ratsion jadvali')}</b>`, dateStr, ''];
 
     if (rows.length === 0) {
-        return safeText([...header, "Hali a'zolar yo'q. Guruhga ovqat rasmini hashtag bilan yuboring."].join('\n'));
+        return safeText([...header, "Hali qayd yo'q."].join('\n'));
     }
 
     // DIQQAT: uzunlik kod NUQTALARI bo'yicha o'lchanadi, kod birliklari bo'yicha emas.
@@ -72,17 +73,18 @@ export async function renderTable(db: TenantClient, tenant: Tenant, group: Group
             `<code>     ${' '.repeat(width)} N T K</code>`,
             ...body,
             '',
-            `${MARK_DONE} vaqtida · ${MARK_LATE} kech · ${MARK_MISS} yo'q`,
-            `✅ To'liq bajardi: <b>${done}/${rows.length}</b>`,
+            `<code>${MARK_DONE}</code> vaqtida · <code>${MARK_LATE}</code> kech · <code>${MARK_MISS}</code> yo'q`,
+            `To'liq bajardi: <b>${done}/${rows.length}</b>`,
         ].join('\n'),
     );
 }
 
-function keyboard(tenantId: string) {
-    const url = webappUrl(tenantId);
-    if (!url) return undefined;
-    return { inline_keyboard: [[{ text: '📊 Batafsil statistika', url }]] };
-}
+// Guruhdagi jadvalda TUGMA YO'Q.
+//
+// Ilgari "Batafsil statistika" tugmasi turardi, lekin u oddiy havola edi:
+// bosilganda mini ilova brauzerda ochilardi, Telegram initData'siz esa u
+// "Havola noto'g'ri" deb xato beradi. Ya'ni tugma hech qachon ishlamagan.
+// Mini ilova murabbiyga shaxsiy chatdagi tugma orqali ochiladi.
 
 /// Pinlangan jadvalni yangilash. Xabar o'chirilgan bo'lsa — qaytadan yaratib pinlaydi.
 export async function updateGroupTable(db: TenantClient, tenant: Tenant, group: Group): Promise<void> {
@@ -90,13 +92,11 @@ export async function updateGroupTable(db: TenantClient, tenant: Tenant, group: 
     if (!bot) return;
 
     const text = await renderTable(db, tenant, group);
-    const reply_markup = keyboard(tenant.id);
 
     if (group.pinnedMessageId) {
         try {
             await bot.telegram.editMessageText(group.chatId, group.pinnedMessageId, undefined, text, {
                 parse_mode: 'HTML',
-                reply_markup,
             });
             return;
         } catch (e) {
@@ -126,8 +126,11 @@ export async function createAndPinTable(
 
     try {
         const msg = await withRetry(() =>
-            bot.telegram.sendMessage(group.chatId, body, { parse_mode: 'HTML', reply_markup: keyboard(tenant.id) }),
+            bot.telegram.sendMessage(group.chatId, body, { parse_mode: 'HTML' }),
         );
+        // Pin faqat jadval YANGIDAN yaratilganda. Kundalik yangilanish
+        // mavjud xabarni tahrirlaydi, shuning uchun guruhda "X pinned a
+        // message" xizmat xabari qayta-qayta chiqmaydi.
         try {
             await bot.telegram.pinChatMessage(group.chatId, msg.message_id, { disable_notification: true });
         } catch (e) {

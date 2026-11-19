@@ -142,12 +142,18 @@ async function main() {
 
     // ---------- Tabrik matni ----------
     const matn = buildMessage('Dilnoza Karim🔥ova', '5001', 10, 10, 27, 30);
-    check('29 matnda kun soni bor', matn.includes('10 KUN TUGADI'));
+    check('29 matnda kun soni bor', matn.includes('10 kun tugadi'), matn.slice(0, 80));
     check('30 natija ko\'rsatilgan', matn.includes('27/30') && matn.includes('90%'));
     check('31 odam teglangan', matn.includes('tg://user?id=5001'));
     check('32 emojili ism matnni buzmaydi',
         Buffer.from(matn, 'utf8').toString('utf8') === matn);
     check('33 motivatsion gap qo\'shilgan', matn.includes('<i>') && matn.length > 120);
+    // Guruhga ketadigan matn bezakdan xoli bo'lsin.
+    // Ism oddiy olinadi — a'zo ismidagi emoji uning o'z ma'lumoti, bezak emas.
+    const bezak = /[\u{1F300}-\u{1FAFF}]/u;
+    const sodda = buildMessage('Bek', '5001', 10, 10, 27, 30);
+    check('33b tabrikda bezak emoji yo\'q', !bezak.test(sodda), sodda.slice(0, 120));
+    check('33c emojili ism esa saqlanadi', matn.includes('Karim'), matn.slice(0, 80));
 
     const matn40 = buildMessage('Bek', '2', 40, 10, 30, 30);
     check('34 40-kunda boshqa gap chiqadi', !matn40.includes(matn.split('<i>')[1] ?? 'xxx'));

@@ -159,12 +159,13 @@ export async function handleGroupMeal(
         caption,
     });
 
-    const mark = result.status === 'late' ? '🟡 Kech, lekin qabul qilindi' : '🟢 Qabul qilindi';
+    // Qisqa va bezaksiz: odam nima qayd etilganini bilsa yetadi
+    const mark = result.status === 'late' ? 'Qabul qilindi (kech)' : 'Qabul qilindi';
     // Hashtagsiz kelgan bo'lsa qaysi ovqat deb yozilganini aytamiz —
     // noto'g'ri tushgan bo'lsa odam darrov ko'radi
     const note = meal ? '' : ' <i>(vaqt bo\'yicha)</i>';
     try {
-        await ctx.reply(`${mark} — ${MEAL_LABELS[resolved]}${note} 💪`, {
+        await ctx.reply(`${mark} — ${MEAL_LABELS[resolved]}${note}`, {
             parse_mode: 'HTML',
             reply_parameters: { message_id: msg.message_id },
         });

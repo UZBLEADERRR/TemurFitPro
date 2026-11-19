@@ -9,7 +9,7 @@ import { log } from './core/logger';
 import { mention, withRetry, tgError } from './core/telegram';
 import { MEAL_TYPES, MEAL_LABELS, MealType, mealTargetMinutes, mealWindowEnd } from './core/meals';
 import { todayIn, localMinutes, safeTz } from './core/time';
-import { updateGroupTable, createAndPinTable } from './features/table';
+import { updateGroupTable } from './features/table';
 import { processOutbox } from './features/outbox';
 import { LIVE_GROUP } from './core/groups';
 import { reconcileTenantWebhooks } from './core/registry';
@@ -292,9 +292,8 @@ async function sendReminder(
     }
 
     const nth = count + 1;
-    const urgency = nth >= tenant.maxReminders ? '🚨' : nth > 1 ? '⚠️' : '⏰';
     const text =
-        `${urgency} ${mention(member.telegramId, member.name)}, <b>${MEAL_LABELS[meal]}</b> rasmini hali yubormadingiz!` +
+        `${mention(member.telegramId, member.name)} — <b>${MEAL_LABELS[meal]}</b> rasmi hali yo'q.` +
         (nth > 1 ? `\n<i>Eslatma ${nth}/${tenant.maxReminders}</i>` : '');
 
     try {
@@ -343,11 +342,11 @@ async function runDailyTables(): Promise<void> {
         for (const group of groups) {
             if (group.lastTableDate === today) continue;
 
-            const bot = getBotByTenant(tenant.id);
-            if (bot && group.pinnedMessageId) {
-                await bot.telegram.unpinChatMessage(group.chatId, group.pinnedMessageId).catch(() => undefined);
-            }
-            await createAndPinTable(db, tenant, group);
+            // Har kuni YANGI xabar yaratib pinlamaymiz — bitta pinlangan
+            // jadval turadi va o'sha yangilanadi. Aks holda guruhda har kuni
+            // "unpinned"/"pinned" xizmat xabarlari chiqib turardi.
+            await updateGroupTable(db, tenant, group);
+            await db.group.update({ where: { id: group.id }, data: { lastTableDate: today } });
             log.info('scheduler', `kunlik jadval: ${group.title || group.chatId} (${today})`);
         }
     }

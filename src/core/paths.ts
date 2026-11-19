@@ -2,9 +2,14 @@ import fs from 'fs';
 import path from 'path';
 
 /// Barcha ma'lumotlar Railway Volume ichidagi shu papkada yotadi.
-/// Railway avtomatik RAILWAY_VOLUME_MOUNT_PATH beradi; lokalda ./data ishlatiladi.
-export const DATA_DIR =
-    process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || path.resolve(process.cwd(), 'data');
+///
+/// Joyni scripts/data-dir.cjs hal qiladi — prestart.js ham aynan o'sha
+/// moduldan oladi, shuning uchun ikkalasi hech qachon boshqa-boshqa
+/// papkaga qaramaydi. Railway'da Volume ulanmagan bo'lsa u xato uloqtiradi.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { resolveDataDir } = require('../../scripts/data-dir.cjs') as { resolveDataDir: () => string };
+
+export const DATA_DIR: string = resolveDataDir();
 
 export const TENANTS_DIR = path.join(DATA_DIR, 'tenants');
 

@@ -1053,7 +1053,7 @@ async function showMemberCard(ctx: Context, db: TenantClient, tenant: Tenant, me
 /// Guruhga yuboriladigan tanishtiruv matni
 export function welcomeText(requireHashtag = true): string {
     return [
-        '✅ <b>Bot ishga tushdi!</b>',
+        '<b>Bot ishga tushdi.</b>',
         '',
         ...(requireHashtag
             ? [

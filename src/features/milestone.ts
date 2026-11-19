@@ -82,16 +82,15 @@ export function buildMessage(
     expected: number,
 ): string {
     const rate = expected ? Math.round((done / expected) * 100) : 0;
-    const bar = '█'.repeat(Math.round(rate / 10)).padEnd(10, '░');
+    const bar = '#'.repeat(Math.round(rate / 10)).padEnd(10, '-');
 
     return safeText(
         [
-            `🎉 <b>${day} KUN TUGADI!</b>`,
+            `<b>${day} kun tugadi</b>`,
             '',
-            `${mention(telegramId, name)} — tabriklaymiz!`,
-            '',
-            `Oxirgi ${every} kunda: <b>${done}/${expected}</b> ovqat`,
-            `<code>${bar}</code> ${rate}%`,
+            `${mention(telegramId, name)} — tabriklaymiz.`,
+            `Oxirgi ${every} kunda: <b>${done}/${expected}</b> ovqat · ${rate}%`,
+            `<code>${bar}</code>`,
             '',
             `<i>${motivation(day, day + name.length)}</i>`,
         ].join('\n'),

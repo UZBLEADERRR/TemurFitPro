@@ -5,7 +5,15 @@ const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-const dataDir = process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || '/data';
+const { resolveDataDir } = require('./data-dir.cjs');
+
+let dataDir;
+try {
+    dataDir = resolveDataDir();
+} catch (e) {
+    console.error(`\n[prestart] ${e.message}\n`);
+    process.exit(1);
+}
 
 try {
     fs.mkdirSync(path.join(dataDir, 'tenants'), { recursive: true });
@@ -20,6 +28,9 @@ console.log(`[prestart] platforma bazasi: ${platformUrl}`);
 
 execFileSync(
     'npx',
-    ['prisma', 'db', 'push', '--schema', 'prisma/platform.prisma', '--skip-generate', '--accept-data-loss'],
+    // --accept-data-loss ATAYLAB yo'q: u sxemadan olib tashlangan ustunni
+    // so'ramasdan o'chirib yuboradi. Bunday o'zgarish kerak bo'lsa deploy
+    // yiqilsin va biz uni qo'lda ko'rib chiqaylik.
+    ['prisma', 'db', 'push', '--schema', 'prisma/platform.prisma', '--skip-generate'],
     { stdio: 'inherit', env: { ...process.env, PLATFORM_DATABASE_URL: platformUrl } },
 );

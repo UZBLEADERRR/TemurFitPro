@@ -99,9 +99,15 @@ mijozlar unga kirmaydi.
 Repozitoriyni ulang, so'ng:
 
 **Volume qo'shing** — Service → Settings → Volumes → Add Volume, mount path `/data`.
-Busiz ma'lumotlar ham, shifrlash kaliti ham har deploy'da yo'qoladi va
-saqlangan bot tokenlari ochilmay qoladi. Bot buni sezsa loglarda qizil
-ogohlantirish beradi.
+
+Busiz bot **umuman ishga tushmaydi**: Volume ulanmagan bo'lsa ma'lumot
+konteyner ichiga yozilardi va har deployda yo'qolardi, shuning uchun
+yiqilib sababini aytadi. Joyni `scripts/data-dir.cjs` hal qiladi —
+prestart ham, ilova ham aynan o'sha moduldan oladi.
+
+`prisma db push` da `--accept-data-loss` ataylab yo'q: u sxemadan olib
+tashlangan ustunni so'ramasdan o'chirib yuborardi. Bunday o'zgarish kerak
+bo'lsa deploy yiqiladi va uni qo'lda ko'rib chiqish kerak.
 
 Env o'zgaruvchilari — **faqat ikkitasi**:
 
@@ -313,6 +319,24 @@ oladi.
 
 Keyin o'zgartirish: menyudagi ⏰ **Mening vaqtlarim**, yoki `/vaqt`.
 Sozlashdan chiqish: `/menu`.
+
+### Bot guruhga nima yozadi
+
+Atigi to'rt narsa — qolgan hamma narsa shaxsiy chatda:
+
+| Nima | Qachon |
+|---|---|
+| "Qabul qilindi — Nonushta" | Ratsion yuborilganda |
+| "Bek — Nonushta rasmi hali yo'q" | Eslatma vaqtida |
+| Pinlangan jadval | Bir marta pinlanadi, keyin **o'sha xabar yangilanadi** |
+| "10 kun tugadi" | Har 10 kunda |
+
+Jadval har kuni qayta yaratilmaydi va qayta pinlanmaydi — aks holda guruhda
+har kuni "pinned a message" xizmat xabari chiqib turardi.
+
+Guruhdagi xabarlarda bezak emoji yo'q va inline tugma ham yo'q. Jadval
+belgilari `+` vaqtida · `~` kech · `·` yo'q — bular bir xil kenglikda, rangli
+doirachalar esa ikki barobar keng chizilib ustunni surib yuborardi.
 
 ### Kundalik ish
 
