@@ -172,6 +172,20 @@ Botni birinchi bo'lib `/start` bosgan odam avtomatik **ega** (owner) bo'ladi.
 | **Guruh murabbiysi** | O'z boti | **Faqat o'ziga biriktirilgan guruh(lar)**: shu guruh a'zolari, jadvali, statistikasi |
 | **A'zo** | O'z boti | Ovqat yuborish, o'z natijasi, mini ilova |
 
+### Qaysi murabbiylik kerak
+
+| Holat | Nima qilinadi |
+|---|---|
+| Murabbiy **barcha guruhlarni** yuritadi | Bot → 🎯 **Murabbiylar** (bir marta) |
+| Har guruhni **boshqa odam** yuritadi | Guruh → 🎯 **Shu guruh murabbiysi** |
+
+Botga **birinchi** `/start` bosgan odam avtomatik **ega** (owner) bo'ladi —
+u allaqachon barcha guruhlarni ko'radi, qo'shimcha tayinlash kerak emas.
+
+Har ikki xil murabbiy ham o'z guruhlarida **xodim** sifatida qaraladi:
+pinlangan jadvalga tushmaydi, eslatma olmaydi, statistikada ishtirokchi
+bo'lib hisoblanmaydi — guruhga ovqat rasmini tashlagan bo'lsa ham.
+
 ### Har bir guruhga alohida murabbiy
 
 Ona bot → 🤖 Botlar → bot → 🏠 Guruhlar → guruh → **🎯 Shu guruh murabbiysi**.

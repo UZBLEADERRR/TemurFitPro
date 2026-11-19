@@ -122,6 +122,27 @@ async function main() {
         back?.role === 'member', JSON.stringify(back));
     check('12 uning ovqat qaydi joyida', (await db.mealRecord.count({ where: { memberId: azo.id } })) === 1);
 
+    // ---------- Bot darajasidagi murabbiy (hamma guruh uchun) ----------
+    // Temur "hamma guruhning murabbiysi" bo'lsa — guruh bo'yicha tayinlash
+    // kerak emas, Member.role = coach/owner yetadi.
+    await db.groupMember.deleteMany({ where: { memberId: temur.id } });
+    await db.member.update({ where: { id: temur.id }, data: { role: 'owner' } });
+
+    const scGlobal = await scopeFor(db, await db.member.findUnique({ where: { id: temur.id } }), false);
+    check('13 bot murabbiysi BARCHA guruhni ko\'radi (cheklovsiz)',
+        scGlobal.isManager && scGlobal.groupIds === null, JSON.stringify(scGlobal));
+
+    // U guruhga rasm tashlagan bo'lsa ham jadvalda ishtirokchi emas
+    await db.groupMember.create({ data: { groupId: g1.id, memberId: temur.id } });
+    await db.mealRecord.create({
+        data: { memberId: temur.id, groupId: g1.id, date: '2026-11-19', mealType: 'tushlik',
+                timeSent: new Date(), status: 'on_time' },
+    });
+    const jadval2 = await renderTable(db, tenant, g1);
+    check('14 bot murabbiysi rasm tashlasa ham jadvalda ishtirokchi emas',
+        !jadval2.includes('Temur'), jadval2.slice(0, 250));
+    check('15 oddiy a\'zo esa joyida', jadval2.includes('Dilnoza'));
+
     console.log(`\nHAMMASI O'TDI (${passed})`);
     await prisma.$disconnect();
     fs.rmSync(dir, { recursive: true, force: true });

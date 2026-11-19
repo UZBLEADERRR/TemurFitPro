@@ -24,10 +24,20 @@ interface Row {
 /// Har bir a'zoning sanasi O'ZINING vaqt mintaqasida hisoblanadi —
 /// Koreyadagi va O'zbekistondagi a'zolar bir jadvalda to'g'ri ko'rinadi.
 async function buildRows(db: TenantClient, group: Group): Promise<Row[]> {
-    // Guruh murabbiysi — xodim, ishtirokchi emas. Uni jadvalga qo'ymaymiz,
-    // aks holda tayinlangan zahoti ⚪️⚪️⚪️ bo'lib ro'yxatda paydo bo'lardi.
+    // Murabbiy — xodim, ishtirokchi emas. Ikki xil murabbiy ham chiqarib
+    // tashlanadi, aks holda ular jadvalda ⚪️⚪️⚪️ bo'lib turardi:
+    //
+    //   GroupMember.role = 'coach'  → shu guruh murabbiysi
+    //   Member.role = coach|owner   → butun bot murabbiysi (masalan ega)
+    //
+    // Eslatmalar va statistika allaqachon shunday hisoblaydi — jadval ham
+    // shularga mos bo'lishi kerak.
     const links = await db.groupMember.findMany({
-        where: { groupId: group.id, role: { not: 'coach' }, member: { status: 'active' } },
+        where: {
+            groupId: group.id,
+            role: { not: 'coach' },
+            member: { status: 'active', role: 'member' },
+        },
         include: { member: true },
         orderBy: { joinedAt: 'asc' },
     });
