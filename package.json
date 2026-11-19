@@ -17,7 +17,7 @@
     "postinstall": "npm run generate",
     "test:delivery": "CONTROL_BOT_TOKEN=1:test ENCRYPTION_KEY=dGVzdC1rZXktZm9yLXVuaXQtdGVzdHMtMDEyMzQ1Ng== SUPER_ADMIN_IDS=1 PUBLIC_URL=https://example.test AI_ENABLED=false DATA_DIR=$(mktemp -d) sh -c 'node scripts/prestart.js && npx tsx scripts/test-delivery.ts'",
     "test:secrets": "npx tsx scripts/test-secrets.ts",
-    "test": "npm run test:text && npm run test:secrets && npm run test:reminders && npm run test:groups && npm run test:scope && npm run test:schedule && npm run test:backup && npm run test:delivery",
+    "test": "npm run test:text && npm run test:secrets && npm run test:reminders && npm run test:groups && npm run test:groupcoach && npm run test:scope && npm run test:schedule && npm run test:backup && npm run test:delivery",
     "test:text": "npx tsx scripts/test-text.ts",
     "test:backup": "npx tsx scripts/test-backup.ts",
     "test:scope": "npx tsx scripts/test-scope.ts",
@@ -25,7 +25,8 @@
     "build:server": "npx tsc && node scripts/copy-generated.js",
     "build:client": "cd client && npm install --include=dev && npm run build",
     "test:reminders": "CONTROL_BOT_TOKEN=1:test npx tsx scripts/test-reminders.ts",
-    "test:groups": "npx tsx scripts/test-groups.ts"
+    "test:groups": "npx tsx scripts/test-groups.ts",
+    "test:groupcoach": "npx tsx scripts/test-groupcoach.ts"
   },
   "license": "ISC",
   "dependencies": {

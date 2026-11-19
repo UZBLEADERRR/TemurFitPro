@@ -219,7 +219,11 @@ export function dueReminders(
 ///   3) bor bo'lsa — a'zo boshiga emas, GURUH boshiga uchta to'plam so'rov
 async function remindGroup(db: TenantClient, tenant: Tenant, group: Group): Promise<void> {
     const links = await db.groupMember.findMany({
-        where: { groupId: group.id, member: { status: 'active', role: 'member' } },
+        where: {
+            groupId: group.id,
+            role: { not: 'coach' }, // shu guruh murabbiysiga eslatma kerak emas
+            member: { status: 'active', role: 'member' },
+        },
         include: { member: true },
     });
     if (links.length === 0) return;

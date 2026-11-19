@@ -175,7 +175,19 @@ Botni birinchi bo'lib `/start` bosgan odam avtomatik **ega** (owner) bo'ladi.
 ### Har bir guruhga alohida murabbiy
 
 Ona bot → 🤖 Botlar → bot → 🏠 Guruhlar → guruh → **🎯 Shu guruh murabbiysi**.
-Guruhdagi ismga bossangiz murabbiylik **shu guruh uchun** qo'shiladi yoki olinadi.
+Ismga bossangiz murabbiylik **shu guruh uchun** qo'shiladi yoki olinadi.
+
+Ro'yxatda botning barcha a'zolari turadi:
+🎯 shu guruh murabbiysi · 👤 shu guruh a'zosi · ➕ hali guruhda emas
+
+➕ belgisidagi odamni ham tayinlash mumkin — u guruhga rasm yubormagan
+bo'lsa ham. Bu muhim: murabbiy odatda guruhga ovqat rasmini tashlamaydi,
+shuning uchun uni faqat guruh a'zolari orasidan tanlash yetmaydi.
+
+Guruh murabbiysi o'sha guruhda **xodim**, ishtirokchi emas: pinlangan
+jadvalda ko'rinmaydi va unga eslatma ham ketmaydi. Murabbiylik olinganda,
+agar u o'sha guruhga hech narsa yubormagan bo'lsa, guruh a'zoligidan ham
+chiqadi; ovqat tarixi bor bo'lsa oddiy a'zo bo'lib qoladi.
 
 Guruh murabbiysi faqat o'z guruhini ko'radi: a'zolar ro'yxati, statistika,
 "yubormaganlar", qidiruv va mini ilova — hammasi shu guruh bilan cheklangan.

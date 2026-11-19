@@ -24,8 +24,10 @@ interface Row {
 /// Har bir a'zoning sanasi O'ZINING vaqt mintaqasida hisoblanadi —
 /// Koreyadagi va O'zbekistondagi a'zolar bir jadvalda to'g'ri ko'rinadi.
 async function buildRows(db: TenantClient, group: Group): Promise<Row[]> {
+    // Guruh murabbiysi — xodim, ishtirokchi emas. Uni jadvalga qo'ymaymiz,
+    // aks holda tayinlangan zahoti ⚪️⚪️⚪️ bo'lib ro'yxatda paydo bo'lardi.
     const links = await db.groupMember.findMany({
-        where: { groupId: group.id, member: { status: 'active' } },
+        where: { groupId: group.id, role: { not: 'coach' }, member: { status: 'active' } },
         include: { member: true },
         orderBy: { joinedAt: 'asc' },
     });

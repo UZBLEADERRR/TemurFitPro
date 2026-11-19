@@ -352,22 +352,42 @@ controlBot.on('callback_query', async ctx => {
                 const t = await prisma.tenant.findUnique({ where: { id: tenantId } });
                 if (!t) return showMain(ctx);
                 const db = await tenantDb(t.botId);
+                const member = await db.member.findUnique({ where: { id: memberId } });
+                if (!member) return showGroupCoaches(ctx, tenantId, groupId);
+
                 const link = await db.groupMember.findUnique({
                     where: { groupId_memberId: { groupId, memberId } },
-                    include: { member: true },
                 });
-                if (!link) return showGroupCoaches(ctx, tenantId, groupId);
 
-                const next = link.role === 'coach' ? 'member' : 'coach';
-                await db.groupMember.update({
-                    where: { groupId_memberId: { groupId, memberId } },
-                    data: { role: next },
-                });
+                if (link?.role === 'coach') {
+                    // Murabbiylikni olib tashlaymiz.
+                    // Odam bu guruhga hech narsa yubormagan bo'lsa — demak u
+                    // faqat murabbiylik uchun qo'shilgan edi, qatorni ham olamiz,
+                    // aks holda u guruh a'zosi bo'lib qolib ketadi.
+                    const meals = await db.mealRecord.count({ where: { memberId, groupId } });
+                    if (meals === 0) {
+                        await db.groupMember.delete({ where: { groupId_memberId: { groupId, memberId } } });
+                    } else {
+                        await db.groupMember.update({
+                            where: { groupId_memberId: { groupId, memberId } },
+                            data: { role: 'member' },
+                        });
+                    }
+                } else {
+                    // Qator bo'lmasa yaratamiz — murabbiy guruhga rasm
+                    // yubormagan bo'lsa ham tayinlash kerak
+                    await db.groupMember.upsert({
+                        where: { groupId_memberId: { groupId, memberId } },
+                        create: { groupId, memberId, role: 'coach' },
+                        update: { role: 'coach' },
+                    });
+                }
+                const next = link?.role === 'coach' ? 'member' : 'coach';
                 await audit(
                     tenantId,
                     String(ctx.from.id),
                     next === 'coach' ? 'groupcoach.add' : 'groupcoach.remove',
-                    `${link.member.name} @ ${groupId}`,
+                    `${member.name} @ ${groupId}`,
                 );
                 return showGroupCoaches(ctx, tenantId, groupId);
             }
@@ -1296,20 +1316,29 @@ async function showGroupCoaches(ctx: Context, tenantId: string, groupId: string)
     const g = await db.group.findUnique({ where: { id: groupId } });
     if (!g) return showGroups(ctx, tenantId);
 
-    const links = await db.groupMember.findMany({
-        where: { groupId },
-        include: { member: true },
-        orderBy: { joinedAt: 'asc' },
-    });
+    // DIQQAT: faqat guruh a'zolarini ko'rsatish yetmaydi.
+    //
+    // GroupMember qatori odam o'sha guruhga RASM YUBORGANDA yaratiladi.
+    // Murabbiy botga /start bossa Member qatori paydo bo'ladi, lekin
+    // guruhga hech narsa yubormagan bo'lsa GroupMember qatori bo'lmaydi —
+    // ya'ni u ro'yxatda umuman chiqmasdi va ikkinchi guruhga tayinlab
+    // bo'lmasdi. Shuning uchun botning BARCHA a'zolari ko'rsatiladi.
+    const [links, everyone] = await Promise.all([
+        db.groupMember.findMany({ where: { groupId }, include: { member: true } }),
+        db.member.findMany({ where: { status: 'active' }, orderBy: { joinedAt: 'asc' } }),
+    ]);
 
+    const roleIn = new Map(links.map(l => [l.memberId, l.role]));
     const coaches = links.filter(l => l.role === 'coach');
 
-    // Guruhdagi har bir a'zoni bosib murabbiy qilish/olib tashlash mumkin
-    const rows = links.slice(0, 60).map(l => [
-        Markup.button.callback(
-            `${l.role === 'coach' ? '🎯' : '👤'} ${l.member.name.slice(0, 28)}`,
-            `s:gcoachset:${tenantId}:${groupId}:${l.memberId}`,
-        ),
+    // Tartib: avval shu guruh murabbiylari, keyin guruh a'zolari, keyin qolganlar
+    const rank = (id: string) => (roleIn.get(id) === 'coach' ? 0 : roleIn.has(id) ? 1 : 2);
+    const sorted = [...everyone].sort((a, b) => rank(a.id) - rank(b.id));
+
+    const mark = (id: string) => (roleIn.get(id) === 'coach' ? '🎯' : roleIn.has(id) ? '👤' : '➕');
+
+    const rows = sorted.slice(0, 60).map(m => [
+        Markup.button.callback(`${mark(m.id)} ${m.name.slice(0, 28)}`, `s:gcoachset:${tenantId}:${groupId}:${m.id}`),
     ]);
     rows.push([Markup.button.callback('⬅️ Guruh', `s:gview:${tenantId}:${groupId}`)]);
 
@@ -1325,8 +1354,14 @@ async function showGroupCoaches(ctx: Context, tenantId: string, groupId: string)
             '',
             "Ismga bosing — murabbiylik <b>shu guruh uchun</b> qo'shiladi yoki olinadi.",
             '',
+            '🎯 shu guruh murabbiysi · 👤 shu guruh a\'zosi · ➕ hali guruhda emas',
+            '',
+            "<i>➕ belgisidagi odamni bossangiz ham bo'ladi — u guruhga rasm",
+            "yubormagan bo'lsa ham murabbiy qilib tayinlanadi.</i>",
+            '',
             "<i>Guruh murabbiysi faqat SHU guruhning a'zolarini, jadvalini va",
-            "statistikasini ko'radi. Boshqa guruhlar unga ko'rinmaydi.</i>",
+            "statistikasini ko'radi. Boshqa guruhlar unga ko'rinmaydi.",
+            "Jadvalda va eslatmalarda u ishtirokchi sifatida hisoblanmaydi.</i>",
             '',
             "<i>Botning barcha guruhlarini ko'radigan murabbiy kerak bo'lsa —",
             'bot menyusidagi 🎯 Murabbiylar dan tayinlang.</i>',
