@@ -345,7 +345,8 @@ Har bir daraja uchun alohida tugma — SQL yozish shart emas:
 
 | Nima | Qayerda | Natija |
 |---|---|---|
-| Bitta guruh | Bot → 🏠 Guruhlar → guruh → 🧹 | O'sha guruh tarixi va faqat undagi a'zolar |
+| Bitta guruh | Bot → 🏠 Guruhlar → guruh → 🧹 | O'sha guruh tarixi va faqat undagi a'zolar (guruh ro'yxatda qoladi) |
+| Guruhni ro'yxatdan | Bot → 🏠 Guruhlar → guruh → 🗑 | Guruh ro'yxatdan ham ketadi |
 | Guruhsiz qolganlar | Ona bot → bot → 🧹 Tozalash → 🧍 | O'chirilgan guruhdan qolgan a'zolar va ularning tarixi |
 | Ovqat tarixi | Ona bot → bot → 🧹 Tozalash | Butun bot bo'yicha ovqat qaydlari |
 | A'zolar | Ona bot → bot → 🧹 Tozalash | Oddiy a'zolar (murabbiylar qoladi) |

@@ -213,6 +213,15 @@ export async function addGroup(
     if (!/^-?\d+$/.test(normalized)) {
         throw new TenantError("Guruh ID faqat raqamlardan iborat bo'lishi kerak (masalan -1001234567890)");
     }
+    // Telegram guruh/superguruh ID si DOIM manfiy. Musbat son — bu shaxsiy
+    // chat yoki minusi tushib qolgan ID; ikkala holatda ham bu guruh emas va
+    // ro'yxatda "o'lik" qator bo'lib qolib ketadi.
+    if (!normalized.startsWith('-')) {
+        throw new TenantError(
+            `Guruh ID manfiy bo'lishi kerak. Siz "${normalized}" yubordingiz — ` +
+                `balki "-100${normalized}" demoqchimisiz? Guruhda /id yozsangiz bot to'g'risini aytadi.`,
+        );
+    }
 
     const db = await tenantDb(tenant.botId);
     const approved = { isActive: true, status: 'approved', approvedAt: new Date(), approvedBy };

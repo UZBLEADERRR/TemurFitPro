@@ -285,6 +285,46 @@ controlBot.on('callback_query', async ctx => {
                     ]),
                 );
 
+            case 'gdel': {
+                const t = await prisma.tenant.findUnique({ where: { id } });
+                if (!t) return showMain(ctx);
+                const db = await tenantDb(t.botId);
+                const g = await db.group.findUnique({ where: { id: extra! } });
+                if (!g) return showGroups(ctx, id);
+
+                const people = await db.groupMember.count({ where: { groupId: g.id } });
+                const meals = await db.mealRecord.count({ where: { groupId: g.id } });
+
+                return reply(
+                    ctx,
+                    [
+                        "🗑 <b>Guruhni ro'yxatdan o'chirish</b>",
+                        '',
+                        `🏠 ${esc(g.title || g.chatId)}`,
+                        `👥 A'zolar: ${people} · 🍽 Ovqat qaydlari: ${meals}`,
+                        '',
+                        people || meals
+                            ? "⚠️ Bu guruhda ma'lumot BOR. O'chirsangiz uning ovqat tarixi va faqat shu guruhdagi a'zolari ham ketadi."
+                            : "Bu guruh bo'sh — bemalol o'chirsa bo'ladi.",
+                        '',
+                        '<i>Bot guruh ichida bo\'lsa va kimdir rasm tashlasa, guruh qaytadan</i>',
+                        '<i>tasdiq so\'rab chiqadi. Butunlay ketishi uchun botni guruhdan chiqaring.</i>',
+                    ].join('\n'),
+                    Markup.inlineKeyboard([
+                        [Markup.button.callback("🗑 Ha, ro'yxatdan o'chir", `s:gdelok:${id}:${extra}`)],
+                        [Markup.button.callback('❌ Bekor', `s:gview:${id}:${extra}`)],
+                    ]),
+                );
+            }
+
+            case 'gdelok': {
+                const t = await prisma.tenant.findUnique({ where: { id } });
+                if (!t) return showMain(ctx);
+                const summary = await purgeGroupData(t, extra!, String(ctx.from.id), true);
+                await reply(ctx, `🗑 Guruh ro'yxatdan o'chirildi. ${esc(summary)}`);
+                return showGroups(ctx, id);
+            }
+
             case 'gpurgeok': {
                 const t = await prisma.tenant.findUnique({ where: { id: id } });
                 if (!t) return;
@@ -1224,6 +1264,7 @@ async function showGroup(ctx: Context, tenantId: string, groupId: string) {
     }
     actions.push([Markup.button.callback('🎯 Shu guruh murabbiysi', `s:gcoach:${tenantId}:${g.id}`)]);
     actions.push([Markup.button.callback("🧹 Ma'lumotlarini tozalash", `s:gpurge:${tenantId}:${g.id}`)]);
+    actions.push([Markup.button.callback("🗑 Ro'yxatdan o'chirish", `s:gdel:${tenantId}:${g.id}`)]);
     actions.push([Markup.button.callback('⬅️ Guruhlar', `s:groups:${tenantId}`)]);
 
     const coaches = await db.groupMember.findMany({

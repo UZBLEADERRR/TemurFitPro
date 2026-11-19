@@ -627,7 +627,12 @@ export function buildTenantBot(bot: Telegraf, tenantId: string): void {
             }
 
             case 'groups': {
-                const all = await db.group.findMany({ where: { isActive: true }, orderBy: { createdAt: 'asc' } });
+                // Rad etilganlarni ko'rsatmaymiz — murabbiy ular bilan hech narsa
+                // qila olmaydi, ro'yxatni esa chalkashtirib yuboradi.
+                const all = await db.group.findMany({
+                    where: { isActive: true, status: { not: 'rejected' } },
+                    orderBy: { createdAt: 'asc' },
+                });
                 if (all.length === 0) {
                     await reply(
                         ctx,
